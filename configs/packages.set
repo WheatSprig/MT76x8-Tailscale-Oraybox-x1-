@@ -1,0 +1,9 @@
+# 需要的包（一行一个包名，CI 会转成 CONFIG_PACKAGE_<name>=y）
+ca-bundle
+kmod-tun
+iptables-nft
+uhttpd
+kmod-usb-printer
+p910nd
+wpad-basic-mbedtls
+libustream-mbedtls20201210

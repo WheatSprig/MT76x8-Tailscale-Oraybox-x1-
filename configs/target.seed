@@ -1,0 +1,12 @@
+# 目标选择种子（配合 `make defconfig` 展开成完整 .config）
+# 用法：cat configs/target.seed >> .config && make defconfig
+CONFIG_TARGET_ramips=y
+CONFIG_TARGET_ramips_mt76x8=y
+CONFIG_TARGET_ramips_mt76x8_DEVICE_oraybox_x1=y
+
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_TARGZ=n
+CONFIG_TARGET_ROOTFS_CPIOGZ=n
+
+# 让内核/包编译复用 ccache，命中缓存时源码构建能从 60~90 分钟降到 20~35 分钟
+CONFIG_CCACHE=y
