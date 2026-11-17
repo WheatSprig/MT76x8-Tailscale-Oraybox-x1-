@@ -45,13 +45,16 @@ if [ "$START" = "1" ]; then
     date +%s >/tmp/ts-login.lock
     rm -f /tmp/ts.ignore-auth
     rm -f /tmp/ts-readvertise.last
+    TS_NAME=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+    [ -n "$TS_NAME" ] || TS_NAME=mt76x8
     ADVERTISE=""
     if [ -s /etc/tailscale/lan-cidr ]; then
         ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"
     fi
     (
-        tailscale up $ADVERTISE --hostname=mt76x8 --reset \
-            </dev/null >/tmp/ts_login.log 2>&1
+        tailscale up $ADVERTISE --hostname="$TS_NAME" --reset \
+            </dev/null >/tmp/ts_login.log 2>&1 \
+            && printf '%s\n' "$TS_NAME" > /etc/tailscale/hostname.applied
         rm -f /tmp/ts-login.lock
     ) &
 

@@ -216,15 +216,24 @@ routes_wanted() {
     fi
 }
 
-# 列表变了就重新广播一次。
+# 列表变了就重新应用一次。
 # 设备搬到别的网络后 br-lan 会变成新网段，而 prefs 里还是旧网段；这里只在
-# 「目标列表 != 上次成功广播的列表」时跑一次 CLI，并用 10 分钟退避避免在
+# 「目标列表 != 上次成功广播的列表」时跑一次 CLI，并用 3 分钟退避避免在
 # 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
-apply_routes() {
+# 设备名同理：离线时保存的名字，连上后由这里补应用一次。
+hostname_wanted() {
+    _h=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+    [ -n "$_h" ] || _h=mt76x8
+    echo "$_h"
+}
+
+apply_prefs() {
     WANT=$(routes_wanted)
     APPLIED=$(cat /etc/tailscale/advertised 2>/dev/null)
-    [ "$WANT" = "$APPLIED" ] && return 0
-    [ -z "$WANT" ] && [ -z "$APPLIED" ] && return 0
+    NAME_WANT=$(hostname_wanted)
+    NAME_APPLIED=$(cat /etc/tailscale/hostname.applied 2>/dev/null)
+    [ -n "$NAME_APPLIED" ] || NAME_APPLIED=mt76x8
+    [ "$WANT" = "$APPLIED" ] && [ "$NAME_WANT" = "$NAME_APPLIED" ] && return 0
     [ -f /tmp/ts-cli.lock ] && return 0
 
     _last=$(cat /tmp/ts-readvertise.last 2>/dev/null || echo 0)
@@ -247,8 +256,15 @@ apply_routes() {
             # 等锁期间用户可能又改过配置，重新读一次，避免用旧值覆盖新值。
             WANT=$(routes_wanted)
             if [ "$WANT" != "$(cat /etc/tailscale/advertised 2>/dev/null)" ]; then
-                tailscale set --advertise-routes="$WANT" >/tmp/ts_readvertise.log 2>&1 \
+                tailscale set --advertise-routes="$WANT" >/tmp/ts_setprefs.log 2>&1 \
                     && echo "$WANT" > /etc/tailscale/advertised
+            fi
+            NAME_WANT=$(hostname_wanted)
+            NAME_APPLIED=$(cat /etc/tailscale/hostname.applied 2>/dev/null)
+            [ -n "$NAME_APPLIED" ] || NAME_APPLIED=mt76x8
+            if [ "$NAME_WANT" != "$NAME_APPLIED" ]; then
+                tailscale set --hostname="$NAME_WANT" >>/tmp/ts_setprefs.log 2>&1 \
+                    && echo "$NAME_WANT" > /etc/tailscale/hostname.applied
             fi
         fi
         rm -f /tmp/ts-cli.lock
@@ -260,8 +276,8 @@ apply_routes() {
         CUR=$(lan_cidr)
         if [ -n "$CUR" ]; then
             echo "$CUR" > /etc/tailscale/lan-cidr
-            apply_routes
         fi
+        apply_prefs
         ts_collect
         sleep 15
     done

@@ -197,6 +197,13 @@ if [ "$OP" = "status" ]; then
         fi
     fi
 
+    # 设备名（Tailscale 后台 / MagicDNS 显示名）。文件不存在时按历史默认 mt76x8，
+    # 免得升级上来的设备一直显示“待应用”。
+    TS_HOSTNAME=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+    [ -n "$TS_HOSTNAME" ] || TS_HOSTNAME=mt76x8
+    TS_HOSTNAME_APPLIED=$(head -n 1 /etc/tailscale/hostname.applied 2>/dev/null)
+    [ -n "$TS_HOSTNAME_APPLIED" ] || TS_HOSTNAME_APPLIED=mt76x8
+
     LAN_IP=$(lan_ip)
     LAN_GW=$(lan_gateway)
     LAN_PROTO=$(uci -q get network.lan.proto)
@@ -261,6 +268,8 @@ if [ "$OP" = "status" ]; then
   "ts_auth_url": "$(json_escape "$TS_AUTH")",
   "ts_login_pending": $TS_LOGIN_PENDING,
   "ts_login_age": $TS_LOGIN_AGE,
+  "ts_hostname": "$(json_escape "$TS_HOSTNAME")",
+  "ts_hostname_applied": "$(json_escape "$TS_HOSTNAME_APPLIED")",
   "ts_routes": "$(json_escape "$TS_ROUTES")",
   "ts_pending": $TS_PENDING,
   "ts_lan_auto": $TS_LAN_AUTO,
@@ -312,6 +321,8 @@ if [ "$OP" = "system" ]; then
     auth_ok || fail "请先登录"
     MODEL=$(cat /tmp/sysinfo/model 2>/dev/null)
     RELEASE=$(sed -n "s/^DISTRIB_DESCRIPTION='\(.*\)'/\1/p" /etc/openwrt_release 2>/dev/null)
+    SYS_HOSTNAME=$(uci -q get system.@system[0].hostname)
+    [ -n "$SYS_HOSTNAME" ] || SYS_HOSTNAME=$(cat /proc/sys/kernel/hostname 2>/dev/null)
     KERNEL=$(uname -r 2>/dev/null)
     UPTIME=$(cut -d. -f1 /proc/uptime 2>/dev/null)
     MEM_TOTAL=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
@@ -331,6 +342,7 @@ if [ "$OP" = "system" ]; then
   "model": "$(json_escape "$MODEL")",
   "release": "$(json_escape "$RELEASE")",
   "kernel": "$(json_escape "$KERNEL")",
+  "hostname": "$(json_escape "$SYS_HOSTNAME")",
   "uptime": "$(json_escape "$UPTIME")",
   "mem_total": "$(json_escape "$MEM_TOTAL")",
   "mem_free": "$(json_escape "$MEM_FREE")",
@@ -380,6 +392,13 @@ if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
         echo
         echo "== cached status =="
         cat /tmp/ts.status 2>/dev/null
+        echo
+        echo "== prefs =="
+        echo "lan-auto=$(ls /etc/tailscale/lan-auto 2>/dev/null)"
+        echo "routes=$(cat /etc/tailscale/routes 2>/dev/null)"
+        echo "advertised=$(cat /etc/tailscale/advertised 2>/dev/null)"
+        echo "hostname=$(cat /etc/tailscale/hostname 2>/dev/null)"
+        echo "hostname_applied=$(cat /etc/tailscale/hostname.applied 2>/dev/null)"
         echo
         echo "== ts_login.log =="
         tail -n 20 /tmp/ts_login.log 2>/dev/null
@@ -431,13 +450,17 @@ case "$OP" in
         fi
         date +%s >/tmp/ts-login.lock
         rm -f /tmp/ts.ignore-auth
+        # 用保存过的设备名，别每次登录都硬写 mt76x8。
+        TS_NAME=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+        [ -n "$TS_NAME" ] || TS_NAME=mt76x8
         ADVERTISE=""
         if [ -s /etc/tailscale/lan-cidr ]; then
             ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"
         fi
         (
             run_limited 240 tailscale up $ADVERTISE \
-                --hostname=mt76x8 --reset </dev/null >/tmp/ts_login.log 2>&1
+                --hostname="$TS_NAME" --reset </dev/null >/tmp/ts_login.log 2>&1 \
+                && printf '%s\n' "$TS_NAME" > /etc/tailscale/hostname.applied
             rm -f /tmp/ts-login.lock
         ) &
         # 登录成功后让开机循环尽快重试广播，不要卡在失败退避里。
@@ -450,6 +473,37 @@ case "$OP" in
         : > /tmp/ts.status
         : > /tmp/ts.ignore-auth
         ok "已退出 Tailscale"
+        ;;
+
+    ts_hostname_save)
+        # 改的是 Tailscale 节点名（后台列表、MagicDNS 里显示的名字），同一台设备、
+        # 同一个 100.x 地址，不会新建节点。规则跟 DNS label 一样。
+        NAME=$(param name | tr 'A-Z' 'a-z')
+        case "$NAME" in
+            '') fail "设备名不能为空" ;;
+            *[!a-z0-9-]*) fail "设备名只能用小写字母、数字和 -" ;;
+            -*|*-) fail "设备名不能以 - 开头或结尾" ;;
+        esac
+        [ ${#NAME} -le 63 ] || fail "设备名最多 63 个字符"
+
+        mkdir -p /etc/tailscale
+        printf '%s\n' "$NAME" > /etc/tailscale/hostname
+
+        # 和路由一样：先落盘，连上以后再应用。
+        if ! ts_ready; then
+            ok "已保存为 $NAME（Tailscale 未连接，连上后自动应用）"
+        fi
+
+        ts_lock_acquire || fail "Tailscale 正在执行其他操作，请稍后再试（配置已保存）"
+        run_limited 120 tailscale set --hostname="$NAME" >/tmp/ts_setname.log 2>&1
+        _rc=$?
+        ts_lock_release
+
+        if [ "$_rc" -ne 0 ]; then
+            fail "应用失败：$(tail -n 1 /tmp/ts_setname.log 2>/dev/null)（已保存，连上后自动应用）"
+        fi
+        printf '%s\n' "$NAME" > /etc/tailscale/hostname.applied
+        ok "设备名已改为 $NAME，Tailscale 后台和 MagicDNS 会同步更新"
         ;;
 
     ts_routes_save)
@@ -594,6 +648,25 @@ case "$OP" in
         uci -q commit p910nd
         run_limited 15 /etc/init.d/p910nd restart >/dev/null 2>&1
         ok "已切换到 TCP $((9100 + PORT))"
+        ;;
+
+    sys_hostname_save)
+        # 改的是 OpenWrt 的系统主机名（/etc/config/system），和 Tailscale 的
+        # 设备名是两回事：Tailscale 名字由 tailscale set --hostname 单独管，
+        # 不会被这里带跑（rc.local 也不读系统主机名）。
+        SYS_NAME=$(param name | tr 'A-Z' 'a-z')
+        case "$SYS_NAME" in
+            '') fail "主机名不能为空" ;;
+            *[!a-z0-9-]*) fail "主机名只能用小写字母、数字和 -" ;;
+            -*|*-) fail "主机名不能以 - 开头或结尾" ;;
+        esac
+        [ ${#SYS_NAME} -le 63 ] || fail "主机名最多 63 个字符"
+
+        uci -q set system.@system[0].hostname="$SYS_NAME"
+        uci -q commit system
+        # 立即生效，不用重启；DHCP 客户端下次续租时会带上新名字。
+        printf '%s\n' "$SYS_NAME" > /proc/sys/kernel/hostname
+        ok "系统主机名已改为 $SYS_NAME"
         ;;
 
     set_password)
