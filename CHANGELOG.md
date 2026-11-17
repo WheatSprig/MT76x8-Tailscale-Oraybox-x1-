@@ -8,6 +8,24 @@
 - `MINOR`：新增功能（控制台、路由、打印等）；
 - `PATCH`：修 bug、改文案、升级依赖（包括 Tailscale 小版本）。
 
+## v1.0.1 — 2026-11-17
+
+修一个会打断连接的误操作，其他与 v1.0.0 相同。
+
+- 固件提交：`589eb95`
+- 内置 Tailscale：`v1.104.7`
+
+### 修复
+
+- **概览页的「登录 Tailscale」在已连接时会误触发重新登录**：它会跑一次
+  `tailscale up --reset`，22MB 的 CLI 把 64MB 设备的 CPU/内存打满，几分钟内
+  几乎无响应（`tailscale ping` 超时），并且 `--reset` 可能清掉已发布的网段。
+  现在：
+  - 概览页按钮只负责跳到 Tailscale 页，不再触发登录；
+  - Tailscale 页在已连接时先弹确认（提示会短暂断开、子网路由暂不可用）；
+  - 服务端 `op=ts_login` 在 `Running` 且没有 `force=1` 时直接拒绝；
+  - `tailscale up` 去掉 `--reset`，登录改为幂等操作。
+
 ## v1.0.0 — 2026-11-17
 
 第一个正式版：把 OrayBox X1（MT76x8 / 16MB Flash / 64MB RAM）做成办公室的
