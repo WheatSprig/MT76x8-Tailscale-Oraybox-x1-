@@ -50,11 +50,13 @@ reload_config
 应用走的是两阶段确认：
 
 1. 保存后立刻生效，页面显示「180 秒内点确认无误，否则自动回滚」；
-2. 回滚靠 `/etc/lan-pending` + `/usr/lib/lan-rollback.sh`：超时、或者应用后
+2. **确认之前旧地址仍然可用**：应用时会把改动前的地址保留成 `br-lan` 的第二地址，
+   即使新网段配错、默认路由没了，也能从旧地址打开控制台点回滚/确认；
+3. 回滚靠 `/etc/lan-pending` + `/usr/lib/lan-rollback.sh`：超时、或者应用后
    直接断电重启（`/etc/init.d/lan-guard` 在开机时检查），都会恢复
    `/etc/config/network.bak` 并 reload；
-3. 点「确认无误」后删除 pending，配置才会真正留下；
-4. Tailscale 会跟着短暂断开（br-lan 重建时默认路由也没了），这是预期。
+4. 点「确认无误」后删除 pending 并摘掉过渡期的旧地址，配置才会真正留下；
+5. Tailscale 会跟着短暂断开（br-lan 重建时默认路由也没了），这是预期。
 
 ### 救援地址 192.168.1.2
 

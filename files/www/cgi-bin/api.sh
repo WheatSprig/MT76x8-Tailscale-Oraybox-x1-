@@ -720,6 +720,13 @@ case "$OP" in
         # 先备份，再写候选配置；配置本身不会被 reload 之外的任何东西立即应用。
         cp /etc/config/network /etc/config/network.bak 2>/dev/null
 
+        # 记下当前地址：确认之前把它保留成第二地址，改错了还能从旧地址回来。
+        OLD_ADDR=$(ip -4 addr show dev br-lan 2>/dev/null \
+            | sed -n 's/.*inet \([0-9.]*\/[0-9]*\).*/\1/p' | head -n 1)
+        OLD_IP=${OLD_ADDR%/*}
+        OLD_PFX=${OLD_ADDR#*/}
+        [ -n "$OLD_IP" ] || OLD_PFX=
+
         uci -q set network.lan.proto="$MODE"
         if [ "$MODE" = "static" ]; then
             uci -q set network.lan.ipaddr="$IP"
@@ -742,7 +749,7 @@ case "$OP" in
 
         TOKEN=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-12)
         [ -n "$TOKEN" ] || TOKEN=$(date +%s)
-        printf '%s\n%s\n' "$TOKEN" "$(date +%s)" > /etc/lan-pending
+        printf '%s\n%s\n%s\n%s\n' "$TOKEN" "$(date +%s)" "$OLD_IP" "$OLD_PFX" > /etc/lan-pending
 
         # 180 秒内没确认就回滚；进程放到后台，CGI 先返回。
         ( /usr/lib/lan-rollback.sh guarded "$TOKEN" >/dev/null 2>&1 & )
@@ -758,7 +765,15 @@ case "$OP" in
 
     lan_confirm)
         if [ -f /etc/lan-pending ]; then
+            OLD_IP=$(sed -n '3p' /etc/lan-pending 2>/dev/null)
+            OLD_PFX=$(sed -n '4p' /etc/lan-pending 2>/dev/null)
             rm -f /etc/lan-pending
+            # 确认后把过渡期的旧地址摘掉（如果和新地址不同）。
+            CUR_IP=$(ip -4 addr show dev br-lan 2>/dev/null \
+                | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
+            if [ -n "$OLD_IP" ] && [ -n "$OLD_PFX" ] && [ "$OLD_IP" != "$CUR_IP" ]; then
+                ip addr del "$OLD_IP/$OLD_PFX" dev br-lan 2>/dev/null
+            fi
             ok "已确认，当前地址配置会保留"
         fi
         ok "没有待确认的地址改动"
