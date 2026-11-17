@@ -252,6 +252,26 @@ jobs:
             echo "::notice::未设置 secret ROOT_PASSWORD_HASH，使用默认密码 mt76x8"
           fi
 
+      # 把构建来源写进镜像：控制台「系统」页和 SSH 都能看到，
+      # 排查问题时可以直接定位到某次提交 / 某个 run。
+      - name: Write build info
+        if: inputs.profile != 'list'
+        env:
+          TS_TAG: ${{ needs.tailscale.outputs.ts_tag }}
+          PROFILE: ${{ github.event.inputs.profile || 'oraybox_x1' }}
+        run: |
+          set -euo pipefail
+          mkdir -p files/etc
+          {
+            echo "COMMIT=${GITHUB_SHA}"
+            echo "REF=${GITHUB_REF_NAME}"
+            echo "RUN=${GITHUB_RUN_NUMBER}"
+            echo "BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "TAILSCALE=${TS_TAG}"
+            echo "PROFILE=${PROFILE}"
+          } > files/etc/mt76x8-build
+          cat files/etc/mt76x8-build
+
       - name: Download ImageBuilder then list profiles or build image
         env:
           PROFILE: ${{ github.event.inputs.profile || 'oraybox_x1' }}
@@ -336,6 +356,7 @@ jobs:
             etc/uci-defaults/98-lan-ip \
             etc/uci-defaults/99-tailscale-setup \
             etc/init.d/tailscale \
+            etc/mt76x8-build \
             lib/upgrade/keep.d/mt76x8 \
             usr/sbin/tailscaled; do
             if [ ! -e "$ROOTFS/$f" ]; then

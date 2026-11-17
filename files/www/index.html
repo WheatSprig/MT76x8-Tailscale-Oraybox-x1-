@@ -372,10 +372,28 @@
           <div class="row"><span class="k">运行时间</span><span class="v" id="sys-uptime">—</span></div>
         </div>
         <div class="card">
+          <h2>构建来源</h2>
+          <div class="row"><span class="k">提交</span><span class="v mono" id="sys-commit">—</span></div>
+          <div class="row"><span class="k">分支 / 标签</span><span class="v mono" id="sys-ref">—</span></div>
+          <div class="row"><span class="k">构建号</span><span class="v mono" id="sys-run">—</span></div>
+          <div class="row"><span class="k">构建时间</span><span class="v mono" id="sys-builtat">—</span></div>
+          <div class="row"><span class="k">Tailscale</span><span class="v mono" id="sys-tstag">—</span></div>
+        </div>
+      </div>
+      <div class="grid c2">
+        <div class="card">
           <h2>资源</h2>
           <div class="row"><span class="k">内存</span><span class="v mono" id="sys-mem">—</span></div>
           <div class="row"><span class="k">负载</span><span class="v mono" id="sys-load">—</span></div>
           <div class="row"><span class="k">存储</span><span class="v mono" id="sys-storage">—</span></div>
+        </div>
+        <div class="card">
+          <h2>诊断</h2>
+          <div class="actions" style="margin-top:0">
+            <button class="btn ghost small" data-act="show_logs">系统日志</button>
+            <button class="btn ghost small" data-act="show_diag">完整诊断</button>
+          </div>
+          <p class="hint">反馈问题时把「提交」和「构建号」一起贴出来，就能定位到具体镜像。</p>
         </div>
       </div>
       <div class="card" style="margin-top:14px">
@@ -619,6 +637,11 @@
       setText('sys-mem', (j.mem_free || '?') + ' / ' + (j.mem_total || '?') + ' MB');
       setText('sys-load', j.load || '—');
       setText('sys-storage', j.storage || '—');
+      setText('sys-commit', j.build_commit || '—');
+      setText('sys-ref', j.build_ref || '—');
+      setText('sys-run', j.build_run ? '#' + j.build_run : '—');
+      setText('sys-builtat', j.build_at || '—');
+      setText('sys-tstag', j.build_tailscale || '—');
     }).catch(function () {});
   }
 

@@ -229,6 +229,11 @@ if [ "$OP" = "system" ]; then
     MEM_FREE=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
     LOAD=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)
     STORAGE=$(df -h /overlay 2>/dev/null | tail -n 1 | awk '{print $4 " 可用 / " $2}')
+    BUILD_COMMIT=$(sed -n 's/^COMMIT=//p' /etc/mt76x8-build 2>/dev/null | cut -c1-8)
+    BUILD_REF=$(sed -n 's/^REF=//p' /etc/mt76x8-build 2>/dev/null)
+    BUILD_RUN=$(sed -n 's/^RUN=//p' /etc/mt76x8-build 2>/dev/null)
+    BUILD_AT=$(sed -n 's/^BUILT_AT=//p' /etc/mt76x8-build 2>/dev/null)
+    BUILD_TS=$(sed -n 's/^TAILSCALE=//p' /etc/mt76x8-build 2>/dev/null)
     json_header
     printf '\r\n'
     cat <<EOF
@@ -241,7 +246,12 @@ if [ "$OP" = "system" ]; then
   "mem_total": "$(json_escape "$MEM_TOTAL")",
   "mem_free": "$(json_escape "$MEM_FREE")",
   "load": "$(json_escape "$LOAD")",
-  "storage": "$(json_escape "$STORAGE")"
+  "storage": "$(json_escape "$STORAGE")",
+  "build_commit": "$(json_escape "$BUILD_COMMIT")",
+  "build_ref": "$(json_escape "$BUILD_REF")",
+  "build_run": "$(json_escape "$BUILD_RUN")",
+  "build_at": "$(json_escape "$BUILD_AT")",
+  "build_tailscale": "$(json_escape "$BUILD_TS")"
 }
 EOF
     exit 0
