@@ -295,7 +295,7 @@
             <div class="ip">局域网 <b class="mono" id="ov-lanip">—</b></div>
           </div>
           <div class="hero-actions">
-            <button class="btn" data-act="login">登录 Tailscale</button>
+            <button class="btn" id="ov-ts-btn" data-act="open-tailscale">Tailscale 设置</button>
             <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
           </div>
         </div>
@@ -387,6 +387,10 @@
           <button class="btn ghost small" id="btn-ts-stop" data-act="ts_stop" data-confirm="1">停止服务</button>
           <button class="btn ghost small" id="btn-ts-start" data-act="ts_start">启动服务</button>
         </div>
+        <p class="hint">
+          已经连上时不需要重新登录；点「重新授权」会重跑一次 `tailscale up`，
+          期间 Tailscale 会短暂断开（十几秒到一分钟），子网路由暂时不可用。
+        </p>
       </div>
       <div class="card" style="margin-top:14px">
         <h2>子网路由</h2>
@@ -737,6 +741,9 @@
     setPill($('side-pill'), st[0], st[1]);
     $('ov-state').textContent = st[0];
     $('ov-state').className = 'state ' + (st[1] === 'ok' ? 'ok' : st[1] === 'bad' ? 'bad' : 'warn');
+    // 概览页只负责“带路”，不在这里触发 tailscale up：已连接时重跑一次会把
+    // 设备拖慢、连接中断。真正的登录/重新授权在 Tailscale 页，且有确认。
+    $('ov-ts-btn').textContent = j.ts_state === 'Running' ? 'Tailscale 设置' : '去登录 Tailscale';
     setText('ov-tsip', j.ts_ip || '—');
     setText('ov-lanip', j.lan_ip || '—');
     $('top-ip').textContent = j.ts_ip || j.lan_ip || '';
@@ -942,24 +949,41 @@
       .catch(function () { toast('读取失败'); });
   }
 
+  function startTsLogin(force) {
+    // 立刻进入等待态，不等下一次轮询；否则点了没反应。
+    authWait.started = Date.now();
+    authWait.notified = false;
+    authCard('ts-auth-card', 'ts-auth', '', true);
+    authCard('ov-auth-banner', 'ov-auth', '', true);
+    authStartFast();
+    post('ts_login', force ? { force: '1' } : undefined).then(function (j) {
+      toast(j.msg || (j.ok ? '完成' : '失败'));
+      if (!j.ok) { authWait.started = 0; authStopFast(); }
+      refresh();
+    }).catch(function () { toast('请求失败'); refresh(); });
+  }
+
   document.addEventListener('click', function (ev) {
     var el = ev.target.closest('[data-act]');
     if (!el) return;
     var op = el.getAttribute('data-act');
     if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
 
+    if (op === 'open-tailscale') { go('tailscale'); return; }
     if (op === 'login') {
       if (!state.authed) { showLogin(); return; }
-      // 立刻进入等待态，不等下一次轮询；否则点了没反应。
-      authWait.started = Date.now();
-      authWait.notified = false;
-      authCard('ts-auth-card', 'ts-auth', '', true);
-      authCard('ov-auth-banner', 'ov-auth', '', true);
-      authStartFast();
-      post('ts_login').then(function (j) {
-        toast(j.msg || (j.ok ? '完成' : '失败'));
-        refresh();
-      }).catch(function () { toast('请求失败'); refresh(); });
+      var st = (state.data && state.data.ts_state) || '';
+      if (state.data && state.data.ts_daemon === 0) {
+        toast('Tailscale 服务已停止，先点「启动服务」');
+        return;
+      }
+      var force = false;
+      if (st === 'Running') {
+        if (!confirm('设备已经在运行。\n\n重新授权会重跑一次 tailscale up，期间 Tailscale 会短暂断开' +
+                     '（十几秒到一分钟），子网路由暂时不可用。\n\n继续吗？')) return;
+        force = true;
+      }
+      startTsLogin(force);
       return;
     }
     if (op === 'refresh') { refresh(); toast('已刷新'); return; }

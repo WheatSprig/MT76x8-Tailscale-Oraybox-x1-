@@ -59,6 +59,16 @@ Tailscale 页的「子网路由」：
 - 保存后由后台调用一次 `tailscale set --advertise-routes=...`，新网段需要在
   Tailscale 后台批准（或由 ACL 的 `autoApprovers` 自动批准）。
 
+### 登录 / 重新授权
+
+- 概览页的按钮只负责跳到 Tailscale 页，**不会**在那里直接触发登录；
+- Tailscale 页的「登录 / 重新授权」在已连接时会先弹确认：重跑一次
+  `tailscale up` 会让连接短暂中断（十几秒到一分钟），子网路由暂时不可用；
+- 服务端也拦了一层：`op=ts_login` 在 `Running` 状态且没有 `force=1` 时直接拒绝，
+  避免误点把一台正在工作的设备断开；
+- 登录用的是 `tailscale up`（幂等），**不再带 `--reset`** —— 那个参数会重写整份
+  prefs，可能把已发布网段和主机名一起清掉。
+
 ### 主机名（系统与 Tailscale 共用一个）
 
 只有一个名字来源：`uci system.@system[0].hostname`。在「系统 → 设备 → 主机名」

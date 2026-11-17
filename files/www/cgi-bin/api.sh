@@ -442,6 +442,15 @@ auth_ok || fail "请先登录"
 
 case "$OP" in
     ts_login)
+        # 已经连上时不要重复跑 tailscale up：22MB 的 CLI 会把 580MHz / 64MB 的
+        # 设备拖到几乎无响应，连接也会短暂中断。真要重新授权必须显式 force=1
+        # （控制台里会弹一次确认）。
+        if [ "$(status_value state)" = "Running" ] && [ "$(param force)" != "1" ]; then
+            fail "设备已经连接，不需要重新登录；要重新授权请在 Tailscale 页确认"
+        fi
+        if [ ! -S /var/run/tailscale/tailscaled.sock ]; then
+            fail "Tailscale 服务已停止，请先点「启动服务」"
+        fi
         # 同一时刻只允许一个 tailscale up，避免多次点击堆进程把设备拖死。
         # 22MB 的 CLI 在 580MHz 上启动一次要十几秒到几十秒，所以给足时间。
         if [ -f /tmp/ts-login.lock ]; then
@@ -458,8 +467,10 @@ case "$OP" in
             ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"
         fi
         (
+            # 不再带 --reset：它会重写整份 prefs（路由、主机名都可能被清掉），
+            # 而 tailscale up 本身已经是幂等的。
             run_limited 240 tailscale up $ADVERTISE \
-                --hostname="$TS_NAME" --reset </dev/null >/tmp/ts_login.log 2>&1 \
+                --hostname="$TS_NAME" </dev/null >/tmp/ts_login.log 2>&1 \
                 && printf '%s\n' "$TS_NAME" > /etc/tailscale/hostname.applied
             rm -f /tmp/ts-login.lock
         ) &

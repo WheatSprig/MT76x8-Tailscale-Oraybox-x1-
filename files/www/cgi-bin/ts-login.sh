@@ -24,6 +24,18 @@ fi
 AUTH_URL=$(sed -n 's/^auth=//p' /tmp/ts.status 2>/dev/null | head -n 1)
 AUTH_URL=$(printf '%s' "$AUTH_URL" | tr -d '\r\n')
 
+# 已经连上就不再触发 tailscale up：CLI 会把设备拖慢，连接也会短暂中断。
+STATE=$(sed -n 's/^state=//p' /tmp/ts.status 2>/dev/null | head -n 1)
+if [ "$STATE" = "Running" ]; then
+    printf 'Status: 303 See Other\r\n'
+    printf 'Location: /\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf 'Content-Type: text/html; charset=utf-8\r\n'
+    printf '\r\n'
+    printf '<!DOCTYPE html><meta charset="utf-8"><p>已经连上 Tailscale，无需重新登录。</p>'
+    exit 0
+fi
+
 if [ -n "$AUTH_URL" ]; then
     printf 'Status: 302 Found\r\n'
     printf 'Location: %s\r\n' "$AUTH_URL"
@@ -52,7 +64,7 @@ if [ "$START" = "1" ]; then
         ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"
     fi
     (
-        tailscale up $ADVERTISE --hostname="$TS_NAME" --reset \
+        tailscale up $ADVERTISE --hostname="$TS_NAME" \
             </dev/null >/tmp/ts_login.log 2>&1 \
             && printf '%s\n' "$TS_NAME" > /etc/tailscale/hostname.applied
         rm -f /tmp/ts-login.lock
