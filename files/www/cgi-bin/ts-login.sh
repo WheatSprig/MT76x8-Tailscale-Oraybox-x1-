@@ -26,11 +26,12 @@ fi
 START=1
 if [ -f /tmp/ts-login.lock ]; then
     AGE=$(( $(date +%s) - $(cat /tmp/ts-login.lock 2>/dev/null || echo 0) ))
-    [ "$AGE" -lt 120 ] && START=0
+    [ "$AGE" -lt 300 ] && START=0
 fi
 
 if [ "$START" = "1" ]; then
     date +%s >/tmp/ts-login.lock
+    rm -f /tmp/ts.ignore-auth
     ADVERTISE=""
     if [ -s /etc/tailscale/lan-cidr ]; then
         ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"

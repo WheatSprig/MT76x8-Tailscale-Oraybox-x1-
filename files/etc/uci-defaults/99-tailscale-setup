@@ -104,9 +104,9 @@ if [ -f /etc/config/uhttpd ]; then
     uci -q set uhttpd.main.cgi_prefix='/cgi-bin'
     # 不列目录（uhttpd 默认就按 index.html 作为首页）。
     uci -q set uhttpd.main.no_dirlists='1'
-    # 慢请求（旧版 CGI 曾把 tailscale CLI 卡住）不允许多占槽位。
+    # 慢请求不允许多占槽位；诊断接口最多跑 30 秒。
     uci -q set uhttpd.main.max_requests='8'
-    uci -q set uhttpd.main.script_timeout='20'
+    uci -q set uhttpd.main.script_timeout='35'
     uci -q commit uhttpd
     /etc/init.d/uhttpd enable
     /etc/init.d/uhttpd restart >/dev/null 2>&1
@@ -144,20 +144,29 @@ lan_cidr() {
 }
 
 # 把 tailscale 状态落到 /tmp/ts.status（state / ip / auth / updated）。
+# 注意：这里刻意不调用 `tailscale status`。CLI 是 22MB 的 Go 程序，
+# 580MHz 上单次解压+启动就要十几秒，轮询会把它自己拖成 100% CPU，
+# 反而让 daemon 来不及响应。状态全部从日志和接口本身推断：
+#   - AuthURL 由 tailscaled 写进 syslog；
+#   - 登录成功后内核会出现 tailscale0 并带上 100.x 地址。
 ts_collect() {
-    rm -f /tmp/ts.json
-    run_limited 8 tailscale status --json >/tmp/ts.json 2>/dev/null
+    _auth=$(logread 2>/dev/null \
+        | grep -o 'AuthURL is https://[^ ]*' | tail -n 1 | awk '{print $3}')
+    # 主动退出登录后，旧日志里的链接不应再显示。
+    [ -f /tmp/ts.ignore-auth ] && _auth=""
 
-    _state=""
-    _ip=""
-    _auth=""
-    if [ -s /tmp/ts.json ]; then
-        _state=$(grep -o '"BackendState"[[:space:]]*:[[:space:]]*"[^"]*"' /tmp/ts.json \
-            | head -n 1 | cut -d '"' -f 4)
-        _auth=$(grep -o '"AuthURL"[[:space:]]*:[[:space:]]*"[^"]*"' /tmp/ts.json \
-            | head -n 1 | cut -d '"' -f 4)
-        _ips=$(grep -o '"TailscaleIPs"[[:space:]]*:[[:space:]]*\[[^]]*\]' /tmp/ts.json | head -n 1)
-        _ip=$(printf '%s' "$_ips" | grep -o '"[0-9][0-9.]*"' | head -n 1 | tr -d '"')
+    _ip=$(ip -4 addr show dev tailscale0 2>/dev/null \
+        | sed -n 's/.*inet \([0-9.]*\)\/[0-9]*.*/\1/p' | head -n 1)
+
+    if [ -n "$_ip" ]; then
+        _state="Running"
+        _auth=""
+    elif [ -n "$_auth" ]; then
+        _state="NeedsLogin"
+    elif [ -S /var/run/tailscale/tailscaled.sock ]; then
+        _state="Starting"
+    else
+        _state="Stopped"
     fi
 
     _tmp=/tmp/ts.status.$$
@@ -194,12 +203,12 @@ mkdir -p /etc/tailscale
         #    下次登录会重新发布一遍。
         if [ "$STATE" = "Running" ]; then
             if [ -n "$LAST_CIDR" ] && [ "$LAST_CIDR" != "$APPLIED" ]; then
-                if run_limited 20 tailscale set --advertise-routes="$LAST_CIDR" >/dev/null 2>&1; then
+                if run_limited 120 tailscale set --advertise-routes="$LAST_CIDR" >/dev/null 2>&1; then
                     APPLIED="$LAST_CIDR"
                 fi
             fi
             if [ "$SERVED" = "0" ]; then
-                run_limited 20 tailscale serve --bg http://127.0.0.1:80 >/dev/null 2>&1
+                run_limited 120 tailscale serve --bg http://127.0.0.1:80 >/dev/null 2>&1
                 SERVED=1
             fi
             sleep 30

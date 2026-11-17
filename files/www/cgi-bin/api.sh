@@ -261,17 +261,29 @@ if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
         echo "== processes =="
         ps w 2>/dev/null
         echo
+        echo "== tailscale interface =="
+        ip -4 addr show dev tailscale0 2>/dev/null || echo "(tailscale0 不存在：未登录或未启动)"
+        echo
+        echo "== /dev/net/tun =="
+        ls -l /dev/net/tun 2>&1
+        echo
         echo "== tailscaled socket =="
         ls -l /var/run/tailscale/ 2>/dev/null
         echo
-        echo "== tailscale status (max 8s) =="
-        run_limited 8 tailscale status 2>&1 | head -n 30
+        echo "== cached status =="
+        cat /tmp/ts.status 2>/dev/null
+        echo
+        echo "== tailscale status (CLI, max 20s) =="
+        run_limited 20 tailscale status 2>&1 | head -n 20
+        echo
+        echo "== ts_login.log =="
+        tail -n 20 /tmp/ts_login.log 2>/dev/null
         echo
         echo "== tailscale log tail =="
-        run_limited 10 logread 2>/dev/null | grep -i -E 'tailscale|tailscaled|tun' | tail -n 25
+        logread 2>/dev/null | grep -i -E 'tailscale|tailscaled|AuthURL|loggedIn' | tail -n 30
         echo
         echo "== dmesg tail =="
-        dmesg 2>/dev/null | tail -n 30
+        dmesg 2>/dev/null | tail -n 20
     fi
     exit 0
 fi
@@ -307,26 +319,29 @@ auth_ok || fail "请先登录"
 case "$OP" in
     ts_login)
         # 同一时刻只允许一个 tailscale up，避免多次点击堆进程把设备拖死。
+        # 22MB 的 CLI 在 580MHz 上启动一次要十几秒到几十秒，所以给足时间。
         if [ -f /tmp/ts-login.lock ]; then
             AGE=$(( $(date +%s) - $(cat /tmp/ts-login.lock 2>/dev/null || echo 0) ))
-            [ "$AGE" -lt 120 ] && ok "登录流程已经在运行，请稍候刷新状态"
+            [ "$AGE" -lt 300 ] && ok "登录流程已经在运行，请稍候刷新状态"
         fi
         date +%s >/tmp/ts-login.lock
+        rm -f /tmp/ts.ignore-auth
         ADVERTISE=""
         if [ -s /etc/tailscale/lan-cidr ]; then
             ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"
         fi
         (
-            run_limited 90 tailscale up $ADVERTISE \
+            run_limited 240 tailscale up $ADVERTISE \
                 --hostname=mt76x8 --reset </dev/null >/tmp/ts_login.log 2>&1
             rm -f /tmp/ts-login.lock
         ) &
-        ok "已经开始登录，授权链接生成后会在页面上自动出现"
+        ok "已经开始登录，授权链接生成后会在页面上自动出现（约 10~40 秒）"
         ;;
 
     ts_logout)
         run_limited 20 tailscale logout >/dev/null 2>&1 || fail "退出失败（可能未登录）"
         : > /tmp/ts.status
+        : > /tmp/ts.ignore-auth
         ok "已退出 Tailscale"
         ;;
 
