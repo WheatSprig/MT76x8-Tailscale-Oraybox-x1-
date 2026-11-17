@@ -148,7 +148,7 @@ jobs:
   # 阶段 2：镜像。用 ImageBuilder 打包（不编译内核/工具链）。
   # ======================================================================
   image:
-    name: Build image (${{ env.PROFILE }})
+    name: Build image (${{ github.event.inputs.profile || 'oraybox_x1' }})
     needs: tailscale
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
@@ -185,9 +185,9 @@ jobs:
       - name: Generate LAN defaults
         if: inputs.profile != 'list'
         env:
-          LAN_MODE: ${{ env.LAN_MODE }}
-          LAN_IP: ${{ env.LAN_IP }}
-          LAN_GATEWAY: ${{ env.LAN_GATEWAY }}
+          LAN_MODE: ${{ github.event.inputs.lan_mode || 'auto' }}
+          LAN_IP: ${{ github.event.inputs.lan_ip || '192.168.1.2' }}
+          LAN_GATEWAY: ${{ github.event.inputs.lan_gateway || '192.168.1.1' }}
         run: |
           set -euo pipefail
 
@@ -235,7 +235,7 @@ jobs:
 
       - name: Download ImageBuilder then list profiles or build image
         env:
-          PROFILE: ${{ env.PROFILE }}
+          PROFILE: ${{ github.event.inputs.profile || 'oraybox_x1' }}
           TS_TAG: ${{ needs.tailscale.outputs.ts_tag }}
         run: |
           set -euo pipefail
@@ -359,7 +359,7 @@ jobs:
             echo "### 构建完成"
             echo "- Tailscale: \`${TS_TAG:-n/a}\`"
             echo "- Profile: \`$PROFILE\`"
-            echo "- LAN 模式: \`${{ env.LAN_MODE }}\`（static 时 \`${{ env.LAN_IP }}\` / \`${{ env.LAN_GATEWAY }}\`）"
+            echo "- LAN 模式: \`${{ github.event.inputs.lan_mode || 'auto' }}\`（static 时 \`${{ github.event.inputs.lan_ip || '192.168.1.2' }}\` / \`${{ github.event.inputs.lan_gateway || '192.168.1.1' }}\`）"
             echo "- 固件: \`$(basename "$BIN")\`"
             echo "- 大小: $SIZE bytes / 上限 ${MAX_FIRMWARE_BYTES} bytes"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -373,7 +373,7 @@ jobs:
         if: inputs.profile != 'list'
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-mt76x8-${{ env.PROFILE }}-${{ github.run_number }}
+          name: immortalwrt-mt76x8-${{ github.event.inputs.profile || 'oraybox_x1' }}-${{ github.run_number }}
           path: |
             imagebuilder/bin/targets/ramips/mt76x8/*sysupgrade.bin
             imagebuilder/bin/targets/ramips/mt76x8/sha256sums
