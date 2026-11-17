@@ -59,6 +59,30 @@ ca-bundle kmod-tun iptables-nft uhttpd
 保留 `uhttpd` 是为了让 `tailscale serve --bg http://127.0.0.1:80` 在本机 80
 端口有可代理的页面；BusyBox httpd 继续在 8080 端口提供同一份 `/www` 页面。
 
+## 已实测的构建结果
+
+用 `profile=oraybox_x1` 跑通的一次真实构建：
+
+| 项目 | 数值 |
+| --- | --- |
+| tailscaled（mipsle softfloat，静态链接） | 21 MiB（`-s -w`，未 UPX） |
+| `*squashfs-sysupgrade.bin` | **13,566,749 字节**（12.94 MiB） |
+| 15 MiB 分区余量 | 约 2.06 MiB |
+| sha256 | `526cfeeaf9cfb7da441a721dc8cfed676110d203a92a04f00404d99f39cffc80` |
+
+工作流在打包后还会校验 `build_dir/*/root-ramips` 里的
+`www/index.html`、`www/cgi-bin/ts-login.sh`、`etc/uci-defaults/99-tailscale-setup`、
+`usr/sbin/tailscaled` 是否存在、脚本是否有执行权限、`tailscale` 软链接是否就位，
+避免 FILES 覆盖层静默失效。
+
+> **关于 `-luci`**：ImageBuilder 的默认包列表里还带有
+> `luci-i18n-base-zh-cn`、`luci-mod-*`、`luci-theme-bootstrap` 等包，它们依赖
+> `luci-base`，opkg 会把 `luci-base` 重新拉回来，所以单独写 `-luci` 并不能真正
+> 移除 LuCI。实测固件里 LuCI 仍然存在，但 13.57 MB 依然能塞进 15 MiB。
+> 工作流会在 `.manifest` 里检测到这种情况并输出 `::warning::`。
+> 想彻底裁掉 LuCI 需要把默认列表里的所有 `luci*` 包逐个 negate，
+> 省下约 2 MB，代价是失去网页管理界面（只能 SSH + UCI 改配置）。
+
 ## 默认访问地址
 
 | 场景 | 地址 |

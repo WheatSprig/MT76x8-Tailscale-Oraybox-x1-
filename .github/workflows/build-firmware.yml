@@ -185,6 +185,29 @@ jobs:
           SIZE=$(stat -c%s "$BIN")
           echo "Firmware: $BIN ($SIZE bytes)"
 
+          # 校验 FILES 覆盖层是否真的进了 rootfs（ImageBuilder 路径写错时不会报错）。
+          ROOTFS=$(find build_dir -maxdepth 2 -type d -name 'root-ramips' -print -quit)
+          [ -n "$ROOTFS" ] || { echo "::error::找不到 rootfs 构建目录"; exit 1; }
+          for f in \
+            www/index.html \
+            www/cgi-bin/ts-login.sh \
+            etc/uci-defaults/99-tailscale-setup \
+            etc/init.d/tailscale \
+            usr/sbin/tailscaled; do
+            if [ ! -e "$ROOTFS/$f" ]; then
+              echo "::error::FILES 覆盖层未生效，rootfs 缺少 $f"
+              exit 1
+            fi
+          done
+          for f in www/cgi-bin/ts-login.sh etc/uci-defaults/99-tailscale-setup; do
+            if [ ! -x "$ROOTFS/$f" ]; then
+              echo "::error::$f 在 rootfs 中没有执行权限，CGI/首次开机脚本会失效"
+              exit 1
+            fi
+          done
+          [ -L "$ROOTFS/usr/sbin/tailscale" ] || { echo "::error::tailscale 软链接缺失"; exit 1; }
+          echo "FILES 校验通过: $(ls -l "$ROOTFS/usr/sbin/tailscaled" | awk '{print $5}') bytes tailscaled"
+
           # 体积预估：tailscaled 已压缩进 squashfs，这里打印清单便于排查。
           MANIFEST=$(find "bin/targets/${IB_TARGET}/${IB_SUBTARGET}" -maxdepth 1 \
             -name '*.manifest' -print -quit)
