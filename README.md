@@ -8,6 +8,7 @@
 - 板载 USB-A 接打印机，`p910nd` 提供 TCP 9100（RAW）；
 - 自带小型 Web 控制台（登录 / 状态 / 打印 / 诊断），**没有 LuCI**；
 - 首次开机自动关闭所有 LED；LAN 用 DHCP 自动取地址，不和主路由抢 DHCP。
+- 版本节奏与每次发版的改动见 [CHANGELOG.md](CHANGELOG.md)。
 
 > 设备：**OrayBox X1**（`board_name = oraybox,x1`，ImageBuilder profile
 > `oraybox_x1`），16MB NOR + 64MB RAM，带 Breed。
