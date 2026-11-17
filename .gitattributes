@@ -6,3 +6,6 @@
 *.html text eol=lf
 *.md text eol=lf
 files/** text eol=lf
+# Windows 批处理必须 CRLF，否则 goto/label 在部分 cmd 版本上会出错
+*.bat text eol=crlf
+*.cmd text eol=crlf
