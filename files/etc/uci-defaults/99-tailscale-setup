@@ -42,6 +42,11 @@ fi
 # ---------- 2. Tailscale 服务 ----------
 mkdir -p /etc/tailscale
 chmod 700 /etc/tailscale
+# 首次配置时默认广播本机 LAN 网段；已有配置（升级保留）不覆盖。
+if [ ! -f /etc/tailscale/routes ]; then
+    : > /etc/tailscale/routes
+    : > /etc/tailscale/lan-auto
+fi
 [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
 
 # ---------- 2.5 关闭 WiFi ----------
@@ -183,19 +188,32 @@ ts_collect() {
 
 mkdir -p /etc/tailscale
 
-# 网段变了就重新广播一次。
-# 设备搬到别的网络后 br-lan 会变成新网段，而 prefs 里还是旧网段；这里只在
-# 「当前网段 != 上次成功广播的网段」时跑一次 CLI，并用 10 分钟退避避免在
-# 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
-apply_cidr() {
-    CUR=$1
-    [ -n "$CUR" ] || return 0
-    # 控制台里手动设过网段时，只要 LAN 没变就不要覆盖它的选择。
-    if [ -f /etc/tailscale/routes-manual ]; then
-        [ "$(cat /etc/tailscale/routes-manual 2>/dev/null)" = "$CUR" ] && return 0
-        rm -f /etc/tailscale/routes-manual
+# 目标广播列表 = （可选）本机 LAN 网段 + 手写网段列表。
+routes_wanted() {
+    _eff=""
+    if [ -f /etc/tailscale/lan-auto ]; then
+        _lan=$(lan_cidr)
+        [ -n "$_lan" ] && _eff="$_lan"
     fi
-    [ "$CUR" = "$(cat /etc/tailscale/advertised 2>/dev/null)" ] && return 0
+    _extra=$(tr '\n' ',' < /etc/tailscale/routes 2>/dev/null | sed 's/,*$//')
+    if [ -n "$_eff" ] && [ -n "$_extra" ]; then
+        echo "$_eff,$_extra"
+    elif [ -n "$_eff" ]; then
+        echo "$_eff"
+    else
+        echo "$_extra"
+    fi
+}
+
+# 列表变了就重新广播一次。
+# 设备搬到别的网络后 br-lan 会变成新网段，而 prefs 里还是旧网段；这里只在
+# 「目标列表 != 上次成功广播的列表」时跑一次 CLI，并用 10 分钟退避避免在
+# 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
+apply_routes() {
+    WANT=$1
+    APPLIED=$(cat /etc/tailscale/advertised 2>/dev/null)
+    [ "$WANT" = "$APPLIED" ] && return 0
+    [ -z "$WANT" ] && [ -z "$APPLIED" ] && return 0
     [ -f /tmp/ts-readvertise.lock ] && return 0
 
     _last=$(cat /tmp/ts-readvertise.last 2>/dev/null || echo 0)
@@ -215,8 +233,8 @@ apply_cidr() {
             _i=$((_i + 1))
         done
         if [ -n "$_ip" ]; then
-            tailscale set --advertise-routes="$CUR" >/tmp/ts_readvertise.log 2>&1 \
-                && echo "$CUR" > /etc/tailscale/advertised
+            tailscale set --advertise-routes="$WANT" >/tmp/ts_readvertise.log 2>&1 \
+                && echo "$WANT" > /etc/tailscale/advertised
         fi
         rm -f /tmp/ts-readvertise.lock
     ) &
@@ -227,7 +245,7 @@ apply_cidr() {
         CUR=$(lan_cidr)
         if [ -n "$CUR" ]; then
             echo "$CUR" > /etc/tailscale/lan-cidr
-            apply_cidr "$CUR"
+            apply_routes "$(routes_wanted)"
         fi
         ts_collect
         sleep 15

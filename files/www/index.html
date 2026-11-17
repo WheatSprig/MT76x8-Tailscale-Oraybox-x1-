@@ -167,14 +167,20 @@
     font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
   }
 
-  /* ---------------- 登录弹层 ---------------- */
-  .modal {
-    position: fixed; inset: 0; display: grid; place-items: center; padding: 20px;
-    background: rgba(15, 23, 42, .35); backdrop-filter: blur(3px); z-index: 20;
+  /* ---------------- 登录页 ---------------- */
+  .login-screen {
+    position: fixed; inset: 0; z-index: 40;
+    display: grid; place-items: center; padding: 24px;
+    background: radial-gradient(circle at 50% 0%, var(--panel-2), var(--bg) 60%);
   }
-  .modal .box { width: 100%; max-width: 360px; padding: 22px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); }
-  .modal h2 { margin: 0 0 6px; font-size: 17px; }
-  .modal p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  .login-card {
+    width: 100%; max-width: 360px; padding: 26px 24px;
+    border: 1px solid var(--line); border-radius: 18px;
+    background: var(--panel); box-shadow: var(--shadow);
+  }
+  .login-card .logo { width: 44px; height: 44px; border-radius: 12px; margin-bottom: 16px; font-size: 20px; }
+  .login-card h1 { margin: 0 0 4px; font-size: 20px; }
+  .login-card p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
 
   #toast {
     position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(80px);
@@ -209,7 +215,7 @@
 </style>
 </head>
 <body>
-<div class="app">
+<div class="app hide" id="app">
   <aside class="sidebar">
     <div class="brand">
       <div class="logo">M</div>
@@ -341,17 +347,23 @@
       <div class="card" style="margin-top:14px">
         <h2>子网路由</h2>
         <div class="row" style="align-items:center">
-          <span class="k">广播办公室网段</span>
+          <span class="k">广播本机 LAN 网段</span>
           <label class="switch">
-            <input type="checkbox" id="routes-toggle">
+            <input type="checkbox" id="lan-auto">
             <span class="slider"></span>
           </label>
         </div>
-        <div class="field">
-          <input id="routes-input" placeholder="192.168.1.0/24" autocomplete="off">
-          <button class="btn small" data-act="ts_routes">保存</button>
+        <div id="route-rows"></div>
+        <div class="actions">
+          <button class="btn ghost small" id="btn-add-route">+ 添加网段</button>
+          <button class="btn small" id="btn-save-routes">保存</button>
         </div>
-        <p class="hint">开关按当前 LAN 网段广播/停止；保存框用于改成别的网段。之后还要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
+        <p class="hint">
+          支持 <span class="mono">192.168.1.0/24</span>、
+          <span class="mono">192.168.1.0/255.255.255.0</span>；
+          只写 <span class="mono">192.168.1.10</span> 时按 /24 处理。
+          新网段保存后还要到 Tailscale 后台批准。
+        </p>
       </div>
       <div class="card hide" id="ts-auth-card" style="margin-top:14px">
         <h2>等待授权</h2>
@@ -469,18 +481,19 @@
   </main>
 </div>
 
-<!-- 登录 -->
-<div class="modal hide" id="login-modal">
-  <div class="box">
-    <h2>登录控制台</h2>
-    <p>用户名固定为 <span class="mono">root</span>，密码与 SSH 相同。</p>
+<!-- 登录（未登录时不渲染任何内部信息） -->
+<div class="login-screen hide" id="login-screen">
+  <div class="login-card">
+    <div class="logo">M</div>
+    <h1>mt76x8 控制台</h1>
+    <p>请输入管理员密码</p>
     <div class="field" style="margin-top:0">
       <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
     </div>
     <div class="actions">
       <button class="btn" id="login-btn" style="flex:1">登录</button>
-      <button class="btn ghost" id="login-cancel">稍后</button>
     </div>
+    <p class="hint" id="login-error"></p>
   </div>
 </div>
 
@@ -566,6 +579,12 @@
   }
 
   function renderStatus(j) {
+    if (!j || !j.ok || j.auth !== 1) {
+      showLogin();
+      return;
+    }
+    showApp();
+    state.authed = true;
     state.data = j;
     var st = stateLabel(j.ts_state);
     setPill($('side-pill'), st[0], st[1]);
@@ -593,8 +612,8 @@
     setText('ts-ip', j.ts_ip || '—');
     setText('ts-host', j.hostname || '—');
     setText('ts-routes', j.ts_routes || '未发布');
-    if (document.activeElement !== $('routes-input')) $('routes-input').value = j.ts_routes || '';
-    $('routes-toggle').checked = !!j.ts_routes;
+    $('lan-auto').checked = j.ts_lan_auto === 1;
+    syncRouteRows((j.ts_extra || '').split(',').filter(Boolean));
 
     var authCard = $('ts-auth-card');
     if (j.ts_auth_url) {
@@ -642,10 +661,68 @@
     } else {
       banner.className = 'banner hide';
     }
+  }
 
-    state.authed = !!j.auth;
-    $('login-modal').classList.toggle('hide', state.authed);
-    document.body.classList.toggle('authed', state.authed);
+  function showLogin() {
+    state.authed = false;
+    $('app').classList.add('hide');
+    $('login-screen').classList.remove('hide');
+  }
+
+  function showApp() {
+    $('login-screen').classList.add('hide');
+    $('app').classList.remove('hide');
+  }
+
+  function routeValues() {
+    return Array.prototype.map.call(
+      document.querySelectorAll('#route-rows input'),
+      function (i) { return i.value.trim(); }
+    ).filter(Boolean).join(',');
+  }
+
+  function addRouteRow(cidr) {
+    var row = document.createElement('div');
+    row.className = 'field';
+    var input = document.createElement('input');
+    input.value = cidr || '';
+    input.placeholder = '192.168.1.0/24';
+    input.autocomplete = 'off';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn ghost small';
+    btn.textContent = '−';
+    btn.addEventListener('click', function () { row.parentNode.removeChild(row); });
+    row.appendChild(input);
+    row.appendChild(btn);
+    $('route-rows').appendChild(row);
+  }
+
+  function syncRouteRows(list) {
+    if (document.activeElement && document.activeElement.closest &&
+        document.activeElement.closest('#route-rows')) {
+      return;
+    }
+    if (routeValues() === (list || []).join(',')) return;
+    $('route-rows').innerHTML = '';
+    (list || []).forEach(addRouteRow);
+  }
+
+  function saveRoutes() {
+    var btn = $('btn-save-routes');
+    btn.disabled = true;
+    toast('保存中，最长约 1 分钟…');
+    post('ts_routes_save', {
+      lan: $('lan-auto').checked ? '1' : '0',
+      routes: routeValues()
+    }).then(function (j) {
+      toast(j.msg || (j.ok ? '完成' : '失败'));
+      btn.disabled = false;
+      refresh();
+    }).catch(function () {
+      toast('请求失败');
+      btn.disabled = false;
+    });
   }
 
   function loadNet() {
@@ -692,8 +769,8 @@
     post(op, extra).then(function (j) {
       toast(j.msg || (j.ok ? '完成' : '失败'));
       if (op === 'logout') {
-        state.authed = false;
-        $('login-modal').classList.remove('hide');
+        showLogin();
+        return;
       }
       refresh();
     }).catch(function () { toast('请求失败'); });
@@ -717,14 +794,13 @@
     if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
 
     if (op === 'login') {
-      if (state.authed) { act('ts_login'); } else { $('login-modal').classList.remove('hide'); }
+      if (state.authed) { act('ts_login'); } else { showLogin(); }
       return;
     }
     if (op === 'refresh') { refresh(); toast('已刷新'); return; }
     if (op === 'show_logs') { showDiag('logs'); return; }
     if (op === 'show_diag') { showDiag('diag'); return; }
     if (op === 'logout') { act('logout'); return; }
-    if (op === 'ts_routes') { act(op, { cidr: $('routes-input').value.trim() }); return; }
     if (op === 'printer_device') { act(op, { device: $('prn-device-input').value.trim() }); return; }
     if (op === 'printer_port') { act(op, { port: $('prn-port-input').value.trim() }); return; }
     if (op === 'set_password') {
@@ -751,20 +827,8 @@
 
   $('btn-refresh').addEventListener('click', function () { refresh(); toast('已刷新'); });
 
-  $('routes-toggle').addEventListener('change', function () {
-    var el = this;
-    el.disabled = true;
-    toast('正在切换，最长约 1 分钟…');
-    post('ts_routes_toggle').then(function (j) {
-      toast(j.msg || (j.ok ? '完成' : '失败'));
-      el.disabled = false;
-      refresh();
-    }).catch(function () {
-      toast('请求失败');
-      el.disabled = false;
-      refresh();
-    });
-  });
+  $('btn-add-route').addEventListener('click', function () { addRouteRow(''); });
+  $('btn-save-routes').addEventListener('click', saveRoutes);
 
   $('login-btn').addEventListener('click', function () {
     var pw = $('login-password').value;
@@ -772,10 +836,12 @@
     post('login', { password: pw }).then(function (j) {
       if (j.ok) {
         $('login-password').value = '';
-        $('login-modal').classList.add('hide');
+        $('login-error').textContent = '';
+        showApp();
         toast('登录成功');
         refresh();
       } else {
+        $('login-error').textContent = j.msg || '登录失败';
         toast(j.msg || '登录失败');
       }
     });
@@ -783,10 +849,6 @@
 
   $('login-password').addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter') $('login-btn').click();
-  });
-
-  $('login-cancel').addEventListener('click', function () {
-    $('login-modal').classList.add('hide');
   });
 
   // ---------------- 固件升级 ----------------

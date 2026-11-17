@@ -102,6 +102,31 @@ status_value() {
     sed -n "s/^$1=//p" "$TMP_STATUS" 2>/dev/null | head -n 1
 }
 
+# 规范化用户输入的网段：
+#   192.168.1.10            -> 192.168.1.0/24（只写 IP 时按 /24）
+#   192.168.1.0/255.255.255.0 -> 192.168.1.0/24
+#   192.168.1.0/24          -> 原样（网络地址会被归一化）
+normalize_cidr() {
+    _raw=$(printf '%s' "$1" | tr -d ' ')
+    [ -n "$_raw" ] || return 1
+    NETWORK=""
+    PREFIX=""
+    case "$_raw" in
+        */*)
+            _ip=${_raw%%/*}
+            _p=${_raw#*/}
+            case "$_p" in
+                *.*) eval "$(/bin/ipcalc.sh "$_ip" "$_p" 2>/dev/null | grep -E '^(NETWORK|PREFIX)=')" ;;
+                *)   eval "$(/bin/ipcalc.sh "$_raw" 2>/dev/null | grep -E '^(NETWORK|PREFIX)=')" ;;
+            esac
+            ;;
+        *)
+            eval "$(/bin/ipcalc.sh "$_raw" 255.255.255.0 2>/dev/null | grep -E '^(NETWORK|PREFIX)=')"
+            ;;
+    esac
+    [ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
+}
+
 # ---------------------------------------------------------------- 输入解析
 
 [ "$REQUEST_METHOD" = "POST" ] || REQUEST_METHOD=GET
@@ -124,6 +149,14 @@ load_password
 # ---------------------------------------------------------------- 只读接口
 
 if [ "$OP" = "status" ]; then
+    # 没登录什么内部信息都不给：连状态都只回一个 auth=0。
+    if ! auth_ok; then
+        json_header
+        printf '\r\n'
+        printf '{"ok":false,"auth":0,"msg":"请先登录"}\n'
+        exit 0
+    fi
+
     TS_STATE=$(status_value state)
     TS_IP=$(status_value ip)
     TS_AUTH=$(status_value auth)
@@ -139,6 +172,9 @@ if [ "$OP" = "status" ]; then
 
     TS_ROUTES=$(head -n 1 /etc/tailscale/advertised 2>/dev/null)
     [ -n "$TS_ROUTES" ] || TS_ROUTES=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
+    TS_LAN_AUTO=0
+    [ -f /etc/tailscale/lan-auto ] && TS_LAN_AUTO=1
+    TS_EXTRA=$(tr '\n' ',' < /etc/tailscale/routes 2>/dev/null | sed 's/,*$//')
 
     PRN_ENABLED=$(uci -q get p910nd.printer.enabled)
     [ -n "$PRN_ENABLED" ] || PRN_ENABLED=0
@@ -178,6 +214,8 @@ if [ "$OP" = "status" ]; then
   "ts_ip": "$(json_escape "$TS_IP")",
   "ts_auth_url": "$(json_escape "$TS_AUTH")",
   "ts_routes": "$(json_escape "$TS_ROUTES")",
+  "ts_lan_auto": $TS_LAN_AUTO,
+  "ts_extra": "$(json_escape "$TS_EXTRA")",
   "ts_socket": $TS_SOCKET,
   "ts_updated": "$(json_escape "$(status_value updated)")",
   "lan_ip": "$(json_escape "$LAN_IP")",
@@ -362,25 +400,51 @@ case "$OP" in
         ok "已退出 Tailscale"
         ;;
 
-    ts_routes)
-        CIDR=$(param cidr)
-        if [ -z "$CIDR" ]; then
-            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1
-            : > /etc/tailscale/advertised
-            # 告诉开机循环：这个 LAN 网段已经被人工处理过，不要自动加回去。
-            cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
-            ok "已停止发布子网路由"
+    ts_routes_save)
+        LAN_FLAG=$(param lan)
+        RAW=$(param routes)
+        NORM=""
+
+        # 逗号分隔输入；每项都规范化，重复的丢掉。
+        OLDIFS=$IFS
+        IFS=','
+        for item in $RAW; do
+            IFS=$OLDIFS
+            [ -n "$(printf '%s' "$item" | tr -d ' ')" ] || continue
+            c=$(normalize_cidr "$item") || fail "网段格式不正确：$item"
+            case ",$NORM," in
+                *",$c,"*) ;;
+                *) NORM="${NORM:+$NORM,}$c" ;;
+            esac
+            IFS=','
+        done
+        IFS=$OLDIFS
+
+        # 生效集合 = （可选）本机 LAN 网段 + 手写列表
+        LAN_CIDR=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
+        EFF=""
+        if [ "$LAN_FLAG" = "1" ]; then
+            [ -n "$LAN_CIDR" ] || fail "还没拿到 LAN 地址，稍后再试"
+            EFF="$LAN_CIDR"
+            : > /etc/tailscale/lan-auto
+        else
+            rm -f /etc/tailscale/lan-auto
         fi
-        printf '%s' "$CIDR" | grep -Eq \
-            '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?(,([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?)*$' \
-            || fail "网段格式不正确，示例：192.168.1.0/24"
-        run_limited 150 tailscale set --advertise-routes="$CIDR" >/dev/null 2>&1 \
-            || fail "设置失败：节点可能尚未登录"
-        echo "$CIDR" > /etc/tailscale/advertised
-        # 记录「这个 LAN 网段已经人工处理过」：开机循环不会再用 LAN 网段覆盖；
-        # 只有 LAN 真的变了才会重新接管。
-        cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
-        ok "已发布 $CIDR，记得在 Tailscale 后台批准"
+        [ -n "$NORM" ] && EFF="${EFF:+$EFF,}$NORM"
+
+        printf '%s' "$NORM" | tr ',' '\n' | sed '/^$/d' > /etc/tailscale/routes
+
+        if [ -z "$EFF" ]; then
+            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1 \
+                || fail "保存失败：节点可能尚未登录"
+            : > /etc/tailscale/advertised
+            ok "已停止发布所有子网路由"
+        fi
+
+        run_limited 150 tailscale set --advertise-routes="$EFF" >/dev/null 2>&1 \
+            || fail "保存失败：节点可能尚未登录"
+        echo "$EFF" > /etc/tailscale/advertised
+        ok "已发布 $EFF（新网段需在后台批准）"
         ;;
 
     ts_serve)
@@ -389,24 +453,6 @@ case "$OP" in
         ok "已开启 HTTPS 访问（需 tailnet 启用 HTTPS Certificates）"
         ;;
 
-    ts_routes_toggle)
-        CUR=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
-        NOW=$(head -n 1 /etc/tailscale/advertised 2>/dev/null)
-        if [ -n "$NOW" ]; then
-            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1 \
-                || fail "关闭失败：节点可能尚未登录"
-            : > /etc/tailscale/advertised
-            # 让开机循环知道「这个 LAN 是人工关掉的」，不要自动加回去。
-            cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
-            ok "已停止广播子网路由"
-        fi
-        [ -n "$CUR" ] || fail "还没拿到 LAN 地址，稍后再试"
-        run_limited 150 tailscale set --advertise-routes="$CUR" >/dev/null 2>&1 \
-            || fail "开启失败：节点可能尚未登录"
-        echo "$CUR" > /etc/tailscale/advertised
-        rm -f /etc/tailscale/routes-manual
-        ok "已开始广播 $CUR（需在后台批准）"
-        ;; 
 
     printer_toggle)
         uci -q set p910nd.printer=p910nd

@@ -9,6 +9,18 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+# 未登录直接踢回登录页：这个入口会触发 tailscale up，不该对匿名开放。
+. /usr/lib/tsui.sh
+if ! auth_ok; then
+    printf 'Status: 303 See Other\r\n'
+    printf 'Location: /\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf 'Content-Type: text/html; charset=utf-8\r\n'
+    printf '\r\n'
+    printf '<!DOCTYPE html><meta charset="utf-8"><p>请先登录控制台。</p>'
+    exit 0
+fi
+
 AUTH_URL=$(sed -n 's/^auth=//p' /tmp/ts.status 2>/dev/null | head -n 1)
 AUTH_URL=$(printf '%s' "$AUTH_URL" | tr -d '\r\n')
 
