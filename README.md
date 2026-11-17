@@ -190,8 +190,48 @@ dmesg | grep -i usblp
 lsusb 2>/dev/null || cat /sys/kernel/debug/usb/devices
 ```
 
-部分打印机（尤其是 GDI/WinPrinter 类）只支持厂商私有协议，USB 直通也打印
-不了，这种机器需要换 PCL/PS 机型。
+正常会看到类似 `usblp0: USB Bidirectional printer dev 3 if 0 alt 0`。
+
+### HP P1008 这类「主机型」打印机
+
+HP LaserJet P1005/P1006/P1007/**P1008**/P1505 属于 GDI/主机型打印机：
+打印机本身只会解释 **ZJS（ZjStream）** 光栅数据，不支持 PCL/PostScript，
+也没有板载字体。
+
+`p910nd` 只是把 TCP 9100 收到的字节原样写到 `/dev/usb/lp0`，路由器不参与
+解释，所以能不能打印取决于**客户端驱动**：
+
+| 客户端 | 情况 |
+| --- | --- |
+| Windows | 装 HP 的 P1008 驱动，端口选 Standard TCP/IP + RAW 9100，一般可用；部分驱动要在端口属性里**关闭双向支持 / SNMP 状态**，否则会卡在「打印机无响应」 |
+| Linux | 客户端需要 `foo2zjs`（自带 P1008 的 ZJS 驱动，可能还会在任务开头上传固件），路由器侧不用装任何驱动 |
+| macOS | 新系统没有 P1008 官方驱动，基本用不了；老系统配合 foo2zjs 才有机会 |
+
+判断依据很简单：**只要客户端能在这台打印机直连 USB 时打印，改成
+`socket://<设备 IP>:9100` 后通常也能打印**，因为发出去的字节流完全一样。
+
+不能打印的典型情况：
+
+- 驱动在提交任务前要做双向状态握手，而 9100 端口是单向的；
+- 打印机是纯 GDI 且客户端没有对应驱动（想发 PCL/PS 给它，它看不懂）。
+
+排查时可以在电脑上直接灌一段原始数据测试链路（字节能到打印机就说明
+USB 和 9100 都通，问题在驱动格式）：
+
+```sh
+# Linux / macOS
+printf 'test\n' | nc <设备 IP> 9100
+```
+
+```powershell
+# Windows PowerShell
+$c = New-Object Net.Sockets.TcpClient('<设备 IP>', 9100)
+$s = $c.GetStream(); $b = [Text.Encoding]::ASCII.GetBytes("test`r`n")
+$s.Write($b, 0, $b.Length); $s.Flush(); $c.Close()
+```
+
+> 结论：**USB 硬件和固件层面支持 P1008**（标准 USB 打印类，`usblp` 能认），
+> 路由器也搬得动；真正的限制在客户端驱动是否能生成 ZJS 数据。
 
 ## 子网路由（办公室局域网访问）
 

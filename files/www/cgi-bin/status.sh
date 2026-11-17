@@ -35,13 +35,17 @@ PRN_PORT=$(uci -q get p910nd.printer.port)
 PRN_DEVICE=$(uci -q get p910nd.printer.device)
 [ -n "$PRN_DEVICE" ] || PRN_DEVICE=/dev/usb/lp0
 
+TCP_PORT=$((9100 + PRN_PORT))
+
 PRN_RUNNING=0
-pidof p910nd >/dev/null 2>&1 && PRN_RUNNING=1
+# 直接看 IPv4 监听表，避免依赖 pidof 是否被 busybox 编进来。
+PORT_HEX=$(printf '%04X' "$TCP_PORT")
+if grep -qE ":$PORT_HEX [0-9A-F]{8}:[0-9A-F]{4} 0A" /proc/net/tcp 2>/dev/null; then
+    PRN_RUNNING=1
+fi
 
 PRN_PRESENT=0
 [ -c "$PRN_DEVICE" ] && PRN_PRESENT=1
-
-TCP_PORT=$((9100 + PRN_PORT))
 
 printf 'Content-Type: application/json; charset=utf-8\r\n'
 printf 'Cache-Control: no-store, no-cache, must-revalidate\r\n'
