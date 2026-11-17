@@ -1,0 +1,40 @@
+#!/bin/sh
+# 首次开机：把本机配置成办公室局域网里的一台普通主机，而不是网关。
+#
+# OrayBox X1 只有一个网口，实际用法是插在办公室交换机上：
+#   Internet ── 主路由 192.168.1.1/24（DHCP + 网关）
+#                     │
+#                     └── OrayBox X1 192.168.1.2/24（Tailscale 子网路由 + 打印）
+#
+# OpenWrt 默认配置是 192.168.1.1/24 + 自带 DHCP 服务器，直接插进办公室会
+# 和主路由抢地址、抢 DHCP，所以这里必须改掉：
+#   - 静态地址 192.168.1.2/24，网关和 DNS 都指向主路由 192.168.1.1
+#   - 关闭 LAN 上的 DHCP 服务器（dnsmasq 只保留 DNS 缓存功能）
+#
+# 构建时可用工作流的 lan_ip / lan_gateway 输入覆盖这两个值；
+# 刷机后也可以手动改：
+#   uci set network.lan.ipaddr='192.168.1.2'
+#   uci set network.lan.gateway='192.168.1.1'
+#   uci set network.lan.dns='192.168.1.1'
+#   uci commit network && reload_config
+
+LAN_IP='192.168.1.2'
+LAN_GATEWAY='192.168.1.1'
+
+[ -f /etc/config/network ] || exit 0
+
+uci -q set network.lan.proto='static'
+uci -q set network.lan.ipaddr="$LAN_IP"
+uci -q set network.lan.netmask='255.255.255.0'
+uci -q set network.lan.gateway="$LAN_GATEWAY"
+uci -q set network.lan.dns="$LAN_GATEWAY"
+uci -q delete network.lan.ip6assign
+uci -q commit network
+
+# 办公室已有主路由负责 DHCP，本机不能再发地址。
+if [ -f /etc/config/dhcp ]; then
+    uci -q set dhcp.lan.ignore='1'
+    uci -q commit dhcp
+fi
+
+exit 0

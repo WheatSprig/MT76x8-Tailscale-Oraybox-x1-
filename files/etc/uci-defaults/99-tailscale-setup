@@ -60,11 +60,24 @@ if [ -x /etc/init.d/p910nd ]; then
 fi
 
 # ---------- 4. 子网路由：把办公室局域网发布到 Tailnet ----------
-# 记录 LAN 网段，供 `tailscale up --advertise-routes` 使用。
+# 记录要发布的网段，供 `tailscale up --advertise-routes` 使用。
+#
+# 这里不能读 `ip addr show br-lan`：uci-defaults 在 /etc/init.d/boot 阶段执行，
+# 此时 network 还没 ifup，br-lan 上还没有地址。改为从 network.lan 的配置算出
+# 网络地址（/bin/ipcalc.sh 由 base-files 提供）。开机后 rc.local 会再刷新一次。
 mkdir -p /etc/tailscale
-ip -4 addr show dev br-lan 2>/dev/null \
-    | sed -n 's/.*inet \([0-9.]*\/[0-9]*\).*/\1/p' \
-    | head -n 1 > /etc/tailscale/lan-cidr
+
+lan_cidr_from_uci() {
+    _ip=$(uci -q get network.lan.ipaddr)
+    _mask=$(uci -q get network.lan.netmask)
+    [ -n "$_ip" ] || return 1
+    [ -x /bin/ipcalc.sh ] || return 1
+    eval "$(/bin/ipcalc.sh "$_ip" "${_mask:-255.255.255.0}" 2>/dev/null \
+        | grep -E '^(NETWORK|PREFIX)=')"
+    [ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
+}
+
+lan_cidr_from_uci > /etc/tailscale/lan-cidr
 
 # 作为子网路由需要开启转发，并让 tailscale0 归入 lan 防火墙区域。
 echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
@@ -87,10 +100,20 @@ cat >/etc/rc.local <<'RCLOCAL'
 # BusyBox httpd 托管 /www，CGI 位于 /www/cgi-bin/。
 /usr/sbin/httpd -p 8080 -h /www
 
-# 每次开机刷新 LAN 网段（改了 LAN IP 后子网路由会跟着变）。
-ip -4 addr show dev br-lan 2>/dev/null \
-    | sed -n 's/.*inet \([0-9.]*\/[0-9]*\).*/\1/p' \
-    | head -n 1 > /etc/tailscale/lan-cidr
+# 每次开机刷新要发布的网段（改了 LAN IP 后子网路由会跟着变）。
+update_lan_cidr() {
+    _ip=$(uci -q get network.lan.ipaddr)
+    _mask=$(uci -q get network.lan.netmask)
+    [ -n "$_ip" ] || return 1
+    [ -x /bin/ipcalc.sh ] || return 1
+    eval "$(/bin/ipcalc.sh "$_ip" "${_mask:-255.255.255.0}" 2>/dev/null \
+        | grep -E '^(NETWORK|PREFIX)=')"
+    [ -n "$NETWORK" ] && [ -n "$PREFIX" ] && \
+        echo "$NETWORK/$PREFIX" > /etc/tailscale/lan-cidr
+}
+
+mkdir -p /etc/tailscale
+update_lan_cidr
 
 # 每 5 秒检查一次，登录成功后把本地 80 端口暴露到 Tailnet，然后退出循环。
 (

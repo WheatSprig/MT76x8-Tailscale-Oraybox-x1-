@@ -42,7 +42,7 @@ else
         fi
 
         (
-            tailscale up $ADVERTISE --accept-routes \
+            tailscale up $ADVERTISE \
                 --hostname=mt76x8-web --reset \
                 </dev/null >/tmp/ts_login.log 2>&1 &
         )
