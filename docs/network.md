@@ -68,6 +68,43 @@ reload_config
 会清掉手工地址，所以 `/etc/hotplug.d/iface/90-rescue-ip` 会在 br-lan 每次 up
 时补回来，`/etc/init.d/lan-guard` 负责开机时补加。
 
+### WiFi 第二路径（可选，默认关闭）
+
+出厂配置是开放热点 `ImmortalWrt`，固件默认把它关掉省内存。如果要在网线之外
+留一条管理链路，可以把它配成 **STA（客户端）** 连办公室 AP（SSID/密码只写进
+设备，不入库）：
+
+```sh
+uci set wireless.radio0.disabled=0
+uci set wireless.default_radio0.mode=sta
+uci set wireless.default_radio0.ssid='<SSID>'
+uci set wireless.default_radio0.encryption=psk2
+uci set wireless.default_radio0.key='<密码>'
+uci set wireless.default_radio0.network='wwan'
+uci commit wireless
+
+uci set network.wwan=interface
+uci set network.wwan.proto=dhcp
+uci set network.wwan.metric=20      # 有线是 0，平时优先走网线
+uci commit network
+
+/etc/init.d/wpad enable
+wifi up
+```
+
+要点：
+
+- **STA 不能桥进 br-lan**（netifd 会报 `BRIDGE_NOT_ALLOWED`），所以用独立接口
+  `wwan`，会拿到第二个地址（同网段、不同 IP）；
+- 两条链路同网段时把 `arp_ignore` 打开，否则 ARP 会从错误接口回应：
+  `sysctl -w net.ipv4.conf.all.arp_ignore=1`（示例已写进 `/etc/sysctl.conf`）；
+- 很多 AP 开了客户端隔离 / 广播过滤，**从有线侧访问 WiFi 地址可能不通**；
+  这条链路的主要用途是“设备自己还能出网”，也就是网线断了 Tailscale 仍能回来；
+- 实测：删掉有线的默认路由后 Tailscale 仍为 `Running`，恢复后自动回到直连；
+- 内存：`wpad` 常驻约 1MB，可用内存从 ~11MB 降到 ~10MB，可以接受；
+- 升级不会再把它关掉：`99-tailscale-setup` 只在无线仍是出厂 `ImmortalWrt`
+  开放热点时才禁用。
+
 子网路由要发布的网段由 `rc.local` 从 `br-lan` 的实际地址算出（`ipcalc.sh` 折算
 成网络地址），DHCP 换地址后会自动跟着更新，不需要手工维护路由表。
 

@@ -71,18 +71,32 @@ fi
 # 开机兜底：回滚未确认的 LAN 改动 + 补加救援地址。
 [ -x /etc/init.d/lan-guard ] && /etc/init.d/lan-guard enable
 
-# ---------- 2.5 关闭 WiFi ----------
-# 这台设备是网线接入的打印/路由盒子，AP 用不上；hostapd + wpa_supplicant
-# 在 64MB 内存里要占 8MB 左右，关掉能给 tailscaled 留出余量。
-# 以后要做 AP / 客户端模式时，改这里（或加 lan_mode 同级的开关）。
+# ---------- 2.5 默认关闭出厂 WiFi ----------
+# 出厂配置是开放热点 ImmortalWrt，用不上还占内存（wpad + 驱动约 4~8MB）。
+# 但如果用户已经配了 STA/AP（例如把 WiFi 当第二条管理链路），升级后不能
+# 把它关掉，否则设备就只剩一条路了。
 if [ -f /etc/config/wireless ]; then
-    for dev in $(uci -q show wireless 2>/dev/null \
-        | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
-        uci -q set "wireless.$dev.disabled='1'"
+    _wifi_keep=0
+    for _iface in $(uci -q show wireless 2>/dev/null \
+        | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p'); do
+        _mode=$(uci -q get "wireless.$_iface.mode")
+        _ssid=$(uci -q get "wireless.$_iface.ssid")
+        [ -z "$_mode" ] && continue
+        [ "$_mode" = "ap" ] && [ "$_ssid" = "ImmortalWrt" ] && continue
+        _wifi_keep=1
     done
-    uci -q commit wireless
-    /etc/init.d/wpad stop >/dev/null 2>&1
-    /etc/init.d/wpad disable >/dev/null 2>&1
+
+    if [ "$_wifi_keep" = "1" ]; then
+        logger -t mt76x8 "检测到自定义无线配置，保留 WiFi"
+    else
+        for dev in $(uci -q show wireless 2>/dev/null \
+            | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+            uci -q set "wireless.$dev.disabled='1'"
+        done
+        uci -q commit wireless
+        /etc/init.d/wpad stop >/dev/null 2>&1
+        /etc/init.d/wpad disable >/dev/null 2>&1
+    fi
 fi
 
 # ---------- 3. USB 打印机 -> TCP 9100 ----------
