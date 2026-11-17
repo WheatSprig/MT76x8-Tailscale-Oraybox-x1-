@@ -1,0 +1,221 @@
+name: Build MT76x8 Tailscale Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: '设备 PROFILE 名称（如 oraybox_x1；输入 list 仅列出所有 mt76x8 profile）'
+        required: true
+        default: 'widora_neo-16m'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IB_VERSION: '23.05.4'
+  IB_TARGET: 'ramips'
+  IB_SUBTARGET: 'mt76x8'
+  # 单文件 tailscaled（内嵌 CLI），slim 构建；不使用 UPX。
+  #
+  # 该列表 = 需求指定的 8 个标签 + 为 16MB Flash 追加的必要裁剪项。
+  # 生成方式（在 tailscale 源码目录执行）：
+  #   go run ./cmd/featuretags --min --add \
+  #     serve,cli,osrouter,nattraversal,dns,useroutes,iptables,c2n,portmapper,tailnetlock,ipnbus,health,cliconndiag
+  # 保留 serve/netstack 才能用 `tailscale serve`，保留 dns/iptables/useroutes
+  # 才能正常解析、转发和接受子网路由。
+  # 实测 mipsle softfloat 二进制约 20.9 MiB（xz9 约 4.6 MiB）。
+  TS_BUILD_TAGS: 'ts_include_cli,ts_omit_ace,ts_omit_acme,ts_omit_advertiseexitnode,ts_omit_advertiseroutes,ts_omit_androidbin,ts_omit_androiddns,ts_omit_appconnectors,ts_omit_aws,ts_omit_bakedroots,ts_omit_bird,ts_omit_cachenetmap,ts_omit_captiveportal,ts_omit_capture,ts_omit_clientmetrics,ts_omit_clientupdate,ts_omit_cloud,ts_omit_colorable,ts_omit_completion,ts_omit_completion_scripts,ts_omit_conn25,ts_omit_connreject,ts_omit_dbus,ts_omit_debug,ts_omit_debugeventbus,ts_omit_debugportmapper,ts_omit_desktop_sessions,ts_omit_dnsresolvecache,ts_omit_doctor,ts_omit_drive,ts_omit_favorites,ts_omit_flashappliance,ts_omit_gro,ts_omit_hujsonconf,ts_omit_identityfederation,ts_omit_kube,ts_omit_linkspeed,ts_omit_linuxdnsfight,ts_omit_listenrawdisco,ts_omit_logtail,ts_omit_netlog,ts_omit_networkmanager,ts_omit_oauthkey,ts_omit_outboundproxy,ts_omit_peerapiclient,ts_omit_peerapiserver,ts_omit_portlist,ts_omit_posture,ts_omit_qrcodes,ts_omit_relayserver,ts_omit_remoteconfig,ts_omit_resolved,ts_omit_routecheck,ts_omit_runtimemetrics,ts_omit_sdnotify,ts_omit_serviceclientprefs,ts_omit_ssh,ts_omit_synology,ts_omit_syslog,ts_omit_syspolicy,ts_omit_systray,ts_omit_taildrop,ts_omit_tap,ts_omit_tpm,ts_omit_tundevstats,ts_omit_unixsocketidentity,ts_omit_useexitnode,ts_omit_useproxy,ts_omit_usermetrics,ts_omit_wakeonlan,ts_omit_webbrowser,ts_omit_webclient'
+  # OrayBox X1 / MT76x8 的 firmware 分区为 0x00f00000 = 15 MiB。
+  MAX_FIRMWARE_BYTES: '15728640'
+
+jobs:
+  build:
+    name: Build ${{ inputs.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ImageBuilder dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential zstd python3 unzip file wget curl git rsync \
+            libncurses-dev libssl-dev zlib1g-dev gawk gettext xsltproc cpio
+
+      - name: Clone latest Tailscale
+        if: inputs.profile != 'list'
+        run: |
+          set -euo pipefail
+          TS_TAG=$(git ls-remote --tags --refs --sort=-v:refname \
+            https://github.com/tailscale/tailscale.git 'refs/tags/v*' \
+            | sed 's#.*refs/tags/##' | grep -v -- '-' | head -n 1)
+          [ -n "$TS_TAG" ]
+          echo "TS_TAG=$TS_TAG" >> "$GITHUB_ENV"
+          echo "Cloning Tailscale $TS_TAG"
+          git clone --depth 1 --branch "$TS_TAG" \
+            https://github.com/tailscale/tailscale.git tailscale
+
+      # 注意：最新 Tailscale 的 go.mod 已要求 Go 1.27.x。
+      # 固定 Go 1.23 会直接编译失败，因此按 Tailscale 的 go.mod 自动选择版本。
+      - name: Set up Go
+        if: inputs.profile != 'list'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tailscale/go.mod
+          cache: true
+          cache-dependency-path: tailscale/go.sum
+
+      - name: Cross-compile tailscaled (linux/mipsle softfloat)
+        if: inputs.profile != 'list'
+        working-directory: tailscale
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/files/usr/sbin"
+          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
+            go build -trimpath -buildvcs=false -ldflags="-s -w" \
+            -tags "$TS_BUILD_TAGS" \
+            -o "$GITHUB_WORKSPACE/files/usr/sbin/tailscaled" ./cmd/tailscaled
+          ln -sf tailscaled "$GITHUB_WORKSPACE/files/usr/sbin/tailscale"
+          ls -lh "$GITHUB_WORKSPACE/files/usr/sbin/"
+          file "$GITHUB_WORKSPACE/files/usr/sbin/tailscaled"
+
+      - name: Generate procd init script
+        if: inputs.profile != 'list'
+        run: |
+          set -euo pipefail
+          mkdir -p files/etc/init.d
+          cat > files/etc/init.d/tailscale <<'INIT_EOF'
+          #!/bin/sh /etc/rc.common
+
+          USE_PROCD=1
+          START=95
+          STOP=10
+
+          start_service() {
+              mkdir -p /etc/tailscale /var/run/tailscale
+              chmod 700 /etc/tailscale
+
+              procd_open_instance
+              procd_set_param env GOGC=10 GOMEMLIMIT=32MiB
+              procd_set_param command /usr/sbin/tailscaled \
+                  --state=/etc/tailscale/tailscaled.state \
+                  --socket=/var/run/tailscale/tailscaled.sock \
+                  --port=41641
+              procd_set_param respawn 3600 5 5
+              procd_set_param stdout 1
+              procd_set_param stderr 1
+              procd_close_instance
+          }
+
+          service_triggers() {
+              procd_add_reload_trigger tailscale
+          }
+
+          reload_service() {
+              stop
+              start
+          }
+          INIT_EOF
+
+      - name: Set executable bits
+        if: inputs.profile != 'list'
+        run: |
+          set -euo pipefail
+          chmod +x \
+            files/usr/sbin/tailscaled \
+            files/etc/init.d/tailscale \
+            files/etc/uci-defaults/99-tailscale-setup \
+            files/www/cgi-bin/ts-login.sh
+
+      - name: Download ImageBuilder then list profiles or build image
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+
+          case "$PROFILE" in
+            list) ;;
+            *[!A-Za-z0-9_.-]*|'')
+              echo "::error::非法的 PROFILE 名称: $PROFILE"
+              exit 1
+              ;;
+          esac
+
+          IB_FILE="immortalwrt-imagebuilder-${IB_VERSION}-${IB_TARGET}-${IB_SUBTARGET}.Linux-x86_64.tar.xz"
+          IB_URL="https://downloads.immortalwrt.org/releases/${IB_VERSION}/targets/${IB_TARGET}/${IB_SUBTARGET}/${IB_FILE}"
+          IB_DIR="${IB_FILE%.tar.xz}"
+
+          echo "Downloading $IB_URL"
+          wget -q "$IB_URL"
+          tar -xf "$IB_FILE"
+          mv "$IB_DIR" imagebuilder
+          cd imagebuilder
+
+          if [ "$PROFILE" = "list" ]; then
+            make info | tee /tmp/ib-info.txt
+            {
+              echo "### 可用的 mt76x8 profile"
+              echo '```'
+              awk '/Available Profiles:/ { found = 1 } found' /tmp/ib-info.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # 保留 uhttpd 作为 80 端口本地 Web 服务，供 tailscale serve 反向代理；
+          # 移除 LuCI 后仍保留 BusyBox httpd（8080）与 uhttpd（80）两套静态页面访问入口。
+          PACKAGES="ca-bundle kmod-tun iptables-nft uhttpd \
+            -luci -luci-ssl -luci-app-firewall \
+            -odhcpd-ipv6only -ppp -ppp-mod-pppoe -ip6tables -odhcp6c"
+
+          echo "Building profile: $PROFILE"
+          make image \
+            PROFILE="$PROFILE" \
+            PACKAGES="$PACKAGES" \
+            FILES="$GITHUB_WORKSPACE/files"
+
+          BIN=$(find "bin/targets/${IB_TARGET}/${IB_SUBTARGET}" -maxdepth 1 \
+            -name '*sysupgrade.bin' -print -quit)
+          [ -n "$BIN" ] || { echo "::error::没有生成 sysupgrade.bin"; exit 1; }
+
+          SIZE=$(stat -c%s "$BIN")
+          echo "Firmware: $BIN ($SIZE bytes)"
+
+          # 体积预估：tailscaled 已压缩进 squashfs，这里打印清单便于排查。
+          MANIFEST=$(find "bin/targets/${IB_TARGET}/${IB_SUBTARGET}" -maxdepth 1 \
+            -name '*.manifest' -print -quit)
+          if [ -n "$MANIFEST" ]; then
+            echo "Manifest: $MANIFEST"
+            if grep -q '^luci-base ' "$MANIFEST"; then
+              echo "::warning::-luci 未生效，luci-base 被依赖回填，固件会明显变大"
+            fi
+          fi
+
+          {
+            echo "### 构建完成"
+            echo "- Tailscale: \`${TS_TAG}\`"
+            echo "- Profile: \`$PROFILE\`"
+            echo "- 固件: \`$(basename "$BIN")\`"
+            echo "- 大小: $SIZE bytes / 上限 ${MAX_FIRMWARE_BYTES} bytes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$SIZE" -gt "$MAX_FIRMWARE_BYTES" ]; then
+            echo "::error::固件 $SIZE 字节，超过 15 MiB 分区上限，禁止上传。"
+            exit 1
+          fi
+
+      - name: Upload firmware artifact
+        if: inputs.profile != 'list'
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-mt76x8-${{ inputs.profile }}-${{ github.run_number }}
+          path: |
+            imagebuilder/bin/targets/ramips/mt76x8/*sysupgrade.bin
+            imagebuilder/bin/targets/ramips/mt76x8/sha256sums
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9

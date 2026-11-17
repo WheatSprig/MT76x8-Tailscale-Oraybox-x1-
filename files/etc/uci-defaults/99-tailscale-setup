@@ -1,0 +1,63 @@
+#!/bin/sh
+# 首次开机初始化：关闭 LED、启用 Tailscale、启动网页与 Tailnet 反向代理守护。
+# 该脚本位于 /etc/uci-defaults/，首次启动执行成功后会被自动删除。
+
+# ---------- 1. 所有 LED 保持熄灭 ----------
+for led in /sys/class/leds/*; do
+    [ -e "$led" ] || continue
+    echo none >"$led/trigger" 2>/dev/null
+    echo 0 >"$led/brightness" 2>/dev/null
+done
+
+# 持久化到 UCI，避免重启后默认 trigger 又把灯点亮。
+if [ -f /etc/config/system ]; then
+    for section in $(uci -q show system | sed -n 's/^system\.\([^.=]*\)=led$/\1/p'); do
+        uci -q delete "system.$section"
+    done
+
+    index=0
+    for led in /sys/class/leds/*; do
+        [ -e "$led" ] || continue
+        name="${led##*/}"
+        index=$((index + 1))
+        uci -q set "system.led_${index}=led"
+        uci -q set "system.led_${index}.name=${name}"
+        uci -q set "system.led_${index}.sysfs=${name}"
+        uci -q set "system.led_${index}.trigger=none"
+        uci -q set "system.led_${index}.default=0"
+    done
+    uci -q commit system
+fi
+
+[ -x /etc/init.d/led ] && /etc/init.d/led restart >/dev/null 2>&1
+
+# ---------- 2. Tailscale 服务 ----------
+mkdir -p /etc/tailscale
+chmod 700 /etc/tailscale
+[ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
+
+# ---------- 3. 开机启动 8080 网页与 Tailscale Serve 守护 ----------
+cat >/etc/rc.local <<'RCLOCAL'
+#!/bin/sh
+# 由 /etc/uci-defaults/99-tailscale-setup 生成。
+
+# BusyBox httpd 托管 /www，CGI 位于 /www/cgi-bin/。
+/usr/sbin/httpd -p 8080 -h /www
+
+# 每 5 秒检查一次，登录成功后把本地 80 端口暴露到 Tailnet，然后退出循环。
+(
+    while true; do
+        if tailscale status --json 2>/dev/null \
+            | grep -q '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then
+            tailscale serve --bg http://127.0.0.1:80
+            break
+        fi
+        sleep 5
+    done
+) &
+
+exit 0
+RCLOCAL
+chmod 755 /etc/rc.local
+
+exit 0
