@@ -35,8 +35,15 @@ else
 
     # 已登录运行中的节点不要重复执行 tailscale up --reset，避免短暂断线。
     if [ -z "$AUTH_URL" ] && [ "$BACKEND_STATE" != "Running" ]; then
+        # 作为子网路由，把办公室局域网发布到 Tailnet（需在管理后台批准）。
+        ADVERTISE=""
+        if [ -s /etc/tailscale/lan-cidr ]; then
+            ADVERTISE="--advertise-routes=$(cat /etc/tailscale/lan-cidr)"
+        fi
+
         (
-            tailscale up --accept-routes --hostname=mt76x8-web --reset \
+            tailscale up $ADVERTISE --accept-routes \
+                --hostname=mt76x8-web --reset \
                 </dev/null >/tmp/ts_login.log 2>&1 &
         )
 

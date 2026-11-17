@@ -8,6 +8,11 @@ on:
         required: true
         default: 'oraybox_x1'
         type: string
+      tailscale_tag:
+        description: 'Tailscale 版本标签（留空 = 自动取最新，如 v1.104.7）'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -30,10 +35,82 @@ env:
   MAX_FIRMWARE_BYTES: '15728640'
 
 jobs:
-  build:
-    name: Build ${{ inputs.profile }}
+  # ======================================================================
+  # 阶段 1：Tailscale 二进制
+  # 与镜像内容无关，产物 21MB，可以独立复用/重跑。
+  # ======================================================================
+  tailscale:
+    name: Build tailscaled (mipsle)
+    if: inputs.profile != 'list'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 40
+    outputs:
+      ts_tag: ${{ steps.resolve.outputs.tag }}
+
+    steps:
+      - name: Resolve Tailscale tag
+        id: resolve
+        env:
+          TS_TAG_INPUT: ${{ inputs.tailscale_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TS_TAG_INPUT" ]; then
+            TS_TAG="$TS_TAG_INPUT"
+          else
+            TS_TAG=$(git ls-remote --tags --refs --sort=-v:refname \
+              https://github.com/tailscale/tailscale.git 'refs/tags/v*' \
+              | sed 's#.*refs/tags/##' | grep -v -- '-' | head -n 1)
+          fi
+          [ -n "$TS_TAG" ] || { echo "::error::无法解析 Tailscale 版本"; exit 1; }
+          echo "tag=$TS_TAG" >> "$GITHUB_OUTPUT"
+          echo "Tailscale 版本: $TS_TAG"
+
+      - name: Checkout Tailscale ${{ steps.resolve.outputs.ts_tag }}
+        uses: actions/checkout@v4
+        with:
+          repository: tailscale/tailscale
+          ref: ${{ steps.resolve.outputs.ts_tag }}
+          fetch-depth: 1
+          path: tailscale
+
+      # 最新 Tailscale 的 go.mod 要求 Go 1.27.x，固定 1.23 会直接编译失败。
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tailscale/go.mod
+          cache: true
+          cache-dependency-path: tailscale/go.sum
+
+      - name: Cross-compile tailscaled (linux/mipsle softfloat)
+        working-directory: tailscale
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
+            go build -trimpath -buildvcs=false -ldflags="-s -w" \
+            -tags "$TS_BUILD_TAGS" \
+            -o "$GITHUB_WORKSPACE/out/tailscaled" ./cmd/tailscaled
+          ls -lh "$GITHUB_WORKSPACE/out/"
+          file "$GITHUB_WORKSPACE/out/tailscaled"
+
+      - name: Upload tailscaled
+        uses: actions/upload-artifact@v4
+        with:
+          name: tailscaled-mipsle
+          path: out/tailscaled
+          retention-days: 7
+          # 已经是压缩过的机器码，再 zip 只浪费时间。
+          compression-level: 0
+
+  # ======================================================================
+  # 阶段 2：镜像。用 ImageBuilder 打包（不编译内核/工具链）。
+  # ======================================================================
+  image:
+    name: Build image (${{ inputs.profile }})
+    needs: tailscale
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -46,94 +123,25 @@ jobs:
             build-essential zstd python3 unzip file wget curl git rsync \
             libncurses-dev libssl-dev zlib1g-dev gawk gettext xsltproc cpio
 
-      - name: Clone latest Tailscale
+      - name: Fetch tailscaled artifact
         if: inputs.profile != 'list'
-        run: |
-          set -euo pipefail
-          TS_TAG=$(git ls-remote --tags --refs --sort=-v:refname \
-            https://github.com/tailscale/tailscale.git 'refs/tags/v*' \
-            | sed 's#.*refs/tags/##' | grep -v -- '-' | head -n 1)
-          [ -n "$TS_TAG" ]
-          echo "TS_TAG=$TS_TAG" >> "$GITHUB_ENV"
-          echo "Cloning Tailscale $TS_TAG"
-          git clone --depth 1 --branch "$TS_TAG" \
-            https://github.com/tailscale/tailscale.git tailscale
-
-      # 注意：最新 Tailscale 的 go.mod 已要求 Go 1.27.x。
-      # 固定 Go 1.23 会直接编译失败，因此按 Tailscale 的 go.mod 自动选择版本。
-      - name: Set up Go
-        if: inputs.profile != 'list'
-        uses: actions/setup-go@v5
+        uses: actions/download-artifact@v4
         with:
-          go-version-file: tailscale/go.mod
-          cache: true
-          cache-dependency-path: tailscale/go.sum
+          name: tailscaled-mipsle
+          path: files/usr/sbin
 
-      - name: Cross-compile tailscaled (linux/mipsle softfloat)
-        if: inputs.profile != 'list'
-        working-directory: tailscale
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/files/usr/sbin"
-          CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
-            go build -trimpath -buildvcs=false -ldflags="-s -w" \
-            -tags "$TS_BUILD_TAGS" \
-            -o "$GITHUB_WORKSPACE/files/usr/sbin/tailscaled" ./cmd/tailscaled
-          ln -sf tailscaled "$GITHUB_WORKSPACE/files/usr/sbin/tailscale"
-          ls -lh "$GITHUB_WORKSPACE/files/usr/sbin/"
-          file "$GITHUB_WORKSPACE/files/usr/sbin/tailscaled"
-
-      - name: Generate procd init script
+      - name: Prepare tailscale binary
         if: inputs.profile != 'list'
         run: |
           set -euo pipefail
-          mkdir -p files/etc/init.d
-          cat > files/etc/init.d/tailscale <<'INIT_EOF'
-          #!/bin/sh /etc/rc.common
-
-          USE_PROCD=1
-          START=95
-          STOP=10
-
-          start_service() {
-              mkdir -p /etc/tailscale /var/run/tailscale
-              chmod 700 /etc/tailscale
-
-              procd_open_instance
-              procd_set_param env GOGC=10 GOMEMLIMIT=32MiB
-              procd_set_param command /usr/sbin/tailscaled \
-                  --state=/etc/tailscale/tailscaled.state \
-                  --socket=/var/run/tailscale/tailscaled.sock \
-                  --port=41641
-              procd_set_param respawn 3600 5 5
-              procd_set_param stdout 1
-              procd_set_param stderr 1
-              procd_close_instance
-          }
-
-          service_triggers() {
-              procd_add_reload_trigger tailscale
-          }
-
-          reload_service() {
-              stop
-              start
-          }
-          INIT_EOF
-
-      - name: Set executable bits
-        if: inputs.profile != 'list'
-        run: |
-          set -euo pipefail
-          chmod +x \
-            files/usr/sbin/tailscaled \
-            files/etc/init.d/tailscale \
-            files/etc/uci-defaults/99-tailscale-setup \
-            files/www/cgi-bin/ts-login.sh
+          chmod +x files/usr/sbin/tailscaled
+          ln -sf tailscaled files/usr/sbin/tailscale
+          ls -lh files/usr/sbin/
 
       - name: Download ImageBuilder then list profiles or build image
         env:
           PROFILE: ${{ inputs.profile }}
+          TS_TAG: ${{ needs.tailscale.outputs.ts_tag }}
         run: |
           set -euo pipefail
 
@@ -166,13 +174,17 @@ jobs:
             exit 0
           fi
 
-          # 保留 uhttpd 作为 80 端口本地 Web 服务，供 tailscale serve 反向代理。
+          # USB 打印：kmod-usb-printer 提供 /dev/usb/lp0，p910nd 映射到 TCP 9100。
+          # wpad/libustream 换成 mbedtls 版本，可以整个丢掉 libopenssl3(1.5 MiB)。
           #
           # 关于 -luci：默认包里还有 luci-app-opkg / luci-compat / luci-lib-ipkg，
           # 以及 default-settings（它直接依赖 luci）、default-settings-chn、
           # ipv6helper（依赖 odhcp6c/odhcpd-ipv6only）。只写 -luci 时 opkg 会把这些
           # 依赖重新拉回来，LuCI 实际仍留在固件里，因此必须逐个 negate。
           PACKAGES="ca-bundle kmod-tun iptables-nft uhttpd \
+            kmod-usb-printer p910nd \
+            wpad-basic-mbedtls libustream-mbedtls20201210 \
+            -wpad-basic-openssl -libustream-openssl20201210 \
             -luci -luci-ssl -luci-app-firewall \
             -luci-app-opkg -luci-compat -luci-lib-base -luci-lib-ipkg \
             -default-settings -default-settings-chn -ipv6helper \
@@ -214,7 +226,6 @@ jobs:
           [ -L "$ROOTFS/usr/sbin/tailscale" ] || { echo "::error::tailscale 软链接缺失"; exit 1; }
           echo "FILES 校验通过: $(ls -l "$ROOTFS/usr/sbin/tailscaled" | awk '{print $5}') bytes tailscaled"
 
-          # 体积预估：tailscaled 已压缩进 squashfs，这里打印清单便于排查。
           MANIFEST=$(find "bin/targets/${IB_TARGET}/${IB_SUBTARGET}" -maxdepth 1 \
             -name '*.manifest' -print -quit)
           if [ -n "$MANIFEST" ]; then
@@ -224,11 +235,16 @@ jobs:
               exit 1
             fi
             echo "LuCI 已彻底移除"
+            if grep -q '^libopenssl3 ' "$MANIFEST"; then
+              echo "::warning::libopenssl3 仍被依赖引入，固体会额外大 1.5 MiB"
+            fi
+            echo "- p910nd: $(grep -c '^p910nd ' "$MANIFEST" || true)"
+            echo "- kmod-usb-printer: $(grep -c '^kmod-usb-printer ' "$MANIFEST" || true)"
           fi
 
           {
             echo "### 构建完成"
-            echo "- Tailscale: \`${TS_TAG}\`"
+            echo "- Tailscale: \`${TS_TAG:-n/a}\`"
             echo "- Profile: \`$PROFILE\`"
             echo "- 固件: \`$(basename "$BIN")\`"
             echo "- 大小: $SIZE bytes / 上限 ${MAX_FIRMWARE_BYTES} bytes"

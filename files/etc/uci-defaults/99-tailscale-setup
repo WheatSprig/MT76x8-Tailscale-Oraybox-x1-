@@ -44,7 +44,42 @@ mkdir -p /etc/tailscale
 chmod 700 /etc/tailscale
 [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
 
-# ---------- 3. 开机启动 8080 网页与 Tailscale Serve 守护 ----------
+# ---------- 3. USB 打印机 -> TCP 9100 ----------
+# 板载 USB-A 口在 DTS 里默认启用（ehci/ohci/usbphy 未禁用），
+# kmod-usb-printer 提供 /dev/usb/lp0，p910nd 把它映射到 9100 端口。
+if [ -x /etc/init.d/p910nd ]; then
+    uci -q delete p910nd.printer
+    uci -q set p910nd.printer=p910nd
+    uci -q set p910nd.printer.device='/dev/usb/lp0'
+    uci -q set p910nd.printer.port='0'
+    uci -q set p910nd.printer.bidirectional='1'
+    uci -q set p910nd.printer.enabled='1'
+    uci -q commit p910nd
+    /etc/init.d/p910nd enable
+    /etc/init.d/p910nd restart >/dev/null 2>&1
+fi
+
+# ---------- 4. 子网路由：把办公室局域网发布到 Tailnet ----------
+# 记录 LAN 网段，供 `tailscale up --advertise-routes` 使用。
+mkdir -p /etc/tailscale
+ip -4 addr show dev br-lan 2>/dev/null \
+    | sed -n 's/.*inet \([0-9.]*\/[0-9]*\).*/\1/p' \
+    | head -n 1 > /etc/tailscale/lan-cidr
+
+# 作为子网路由需要开启转发，并让 tailscale0 归入 lan 防火墙区域。
+echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+grep -q '^net.ipv4.ip_forward=1$' /etc/sysctl.conf 2>/dev/null \
+    || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+
+for zone in $(uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+    [ "$(uci -q get "firewall.$zone.name")" = "lan" ] || continue
+    if ! uci -q get "firewall.$zone.device" | grep -qw tailscale0; then
+        uci -q add_list "firewall.$zone.device=tailscale0"
+    fi
+done
+uci -q commit firewall
+
+# ---------- 5. 开机启动 8080 网页与 Tailscale Serve 守护 ----------
 cat >/etc/rc.local <<'RCLOCAL'
 #!/bin/sh
 # 由 /etc/uci-defaults/99-tailscale-setup 生成。
@@ -52,11 +87,20 @@ cat >/etc/rc.local <<'RCLOCAL'
 # BusyBox httpd 托管 /www，CGI 位于 /www/cgi-bin/。
 /usr/sbin/httpd -p 8080 -h /www
 
+# 每次开机刷新 LAN 网段（改了 LAN IP 后子网路由会跟着变）。
+ip -4 addr show dev br-lan 2>/dev/null \
+    | sed -n 's/.*inet \([0-9.]*\/[0-9]*\).*/\1/p' \
+    | head -n 1 > /etc/tailscale/lan-cidr
+
 # 每 5 秒检查一次，登录成功后把本地 80 端口暴露到 Tailnet，然后退出循环。
 (
     while true; do
         if tailscale status --json 2>/dev/null \
             | grep -q '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then
+            # 登录后补上子网路由（管理后台批准后对内网生效）。
+            LAN_CIDR=$(cat /etc/tailscale/lan-cidr 2>/dev/null)
+            [ -n "$LAN_CIDR" ] && \
+                tailscale set --advertise-routes="$LAN_CIDR" >/dev/null 2>&1
             tailscale serve --bg http://127.0.0.1:80
             break
         fi
