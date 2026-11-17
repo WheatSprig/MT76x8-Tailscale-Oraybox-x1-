@@ -70,15 +70,18 @@ ca-bundle kmod-tun iptables-nft uhttpd
 
 ## 已实测的构建结果
 
-用 `profile=oraybox_x1` 跑通的一次真实构建（仍含 LuCI 的旧版本，仅用于对比）：
+用 `profile=oraybox_x1` 跑通的真实构建（`run 44001845479`）：
 
 | 项目 | 数值 |
 | --- | --- |
-| tailscaled（mipsle softfloat，静态链接） | 21 MiB（`-s -w`，未 UPX） |
-| `*squashfs-sysupgrade.bin`（含 LuCI） | 13,566,749 字节（12.94 MiB） |
-| 15 MiB 分区余量 | 约 2.06 MiB |
+| tailscaled（mipsle softfloat，静态链接） | 21,889,215 字节（20.9 MiB） |
+| `*squashfs-sysupgrade.bin` | **12,976,925 字节（12.38 MiB）** |
+| 15 MiB 分区余量 | 2,751,715 字节（2.62 MiB） |
+| sha256 | `ffef677f701298002949ab1655e8286bb95a2b4479d1df6f9ce9bf91537bb54e` |
+| LuCI | 已彻底移除（manifest 校验通过） |
 
-彻底裁掉 LuCI 后体积会再降约 2 MB，余量更充足。
+作为对比：同样配置但 LuCI 被依赖回填的版本是 13,566,749 字节，裁掉后省下约
+576 KiB。
 
 工作流在打包后还会校验 `build_dir/*/root-ramips` 里的
 `www/index.html`、`www/cgi-bin/ts-login.sh`、`etc/uci-defaults/99-tailscale-setup`、
