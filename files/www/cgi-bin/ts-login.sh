@@ -41,6 +41,12 @@ if [ "$START" = "1" ]; then
             </dev/null >/tmp/ts_login.log 2>&1
         rm -f /tmp/ts-login.lock
     ) &
+
+    # up 已经带上 --advertise-routes，标记一下，避免开机循环再跑一次 CLI。
+    if [ -s /etc/tailscale/lan-cidr ]; then
+        head -n 1 /etc/tailscale/lan-cidr > /etc/tailscale/advertised 2>/dev/null
+    fi
+    rm -f /etc/tailscale/routes-manual 2>/dev/null
 fi
 
 printf 'Status: 303 See Other\r\n'

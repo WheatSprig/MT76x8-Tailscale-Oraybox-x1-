@@ -134,6 +134,13 @@
   .bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-top: 8px; }
   .bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #22d3ee); }
 
+  .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: .18s; cursor: pointer; }
+  .switch .slider::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(15,23,42,.28); transition: .18s; }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
+
   /* ---------------- 控件 ---------------- */
   .btn {
     padding: 9px 14px; border: 0; border-radius: 9px; cursor: pointer;
@@ -333,11 +340,18 @@
       </div>
       <div class="card" style="margin-top:14px">
         <h2>子网路由</h2>
+        <div class="row" style="align-items:center">
+          <span class="k">广播办公室网段</span>
+          <label class="switch">
+            <input type="checkbox" id="routes-toggle">
+            <span class="slider"></span>
+          </label>
+        </div>
         <div class="field">
           <input id="routes-input" placeholder="192.168.1.0/24" autocomplete="off">
           <button class="btn small" data-act="ts_routes">保存</button>
         </div>
-        <p class="hint">保存后还要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
+        <p class="hint">开关按当前 LAN 网段广播/停止；保存框用于改成别的网段。之后还要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
       </div>
       <div class="card hide" id="ts-auth-card" style="margin-top:14px">
         <h2>等待授权</h2>
@@ -580,6 +594,7 @@
     setText('ts-host', j.hostname || '—');
     setText('ts-routes', j.ts_routes || '未发布');
     if (document.activeElement !== $('routes-input')) $('routes-input').value = j.ts_routes || '';
+    $('routes-toggle').checked = !!j.ts_routes;
 
     var authCard = $('ts-auth-card');
     if (j.ts_auth_url) {
@@ -735,6 +750,21 @@
   });
 
   $('btn-refresh').addEventListener('click', function () { refresh(); toast('已刷新'); });
+
+  $('routes-toggle').addEventListener('change', function () {
+    var el = this;
+    el.disabled = true;
+    toast('正在切换，最长约 1 分钟…');
+    post('ts_routes_toggle').then(function (j) {
+      toast(j.msg || (j.ok ? '完成' : '失败'));
+      el.disabled = false;
+      refresh();
+    }).catch(function () {
+      toast('请求失败');
+      el.disabled = false;
+      refresh();
+    });
+  });
 
   $('login-btn').addEventListener('click', function () {
     var pw = $('login-password').value;

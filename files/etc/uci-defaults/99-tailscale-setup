@@ -183,10 +183,52 @@ ts_collect() {
 
 mkdir -p /etc/tailscale
 
+# 网段变了就重新广播一次。
+# 设备搬到别的网络后 br-lan 会变成新网段，而 prefs 里还是旧网段；这里只在
+# 「当前网段 != 上次成功广播的网段」时跑一次 CLI，并用 10 分钟退避避免在
+# 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
+apply_cidr() {
+    CUR=$1
+    [ -n "$CUR" ] || return 0
+    # 控制台里手动设过网段时，只要 LAN 没变就不要覆盖它的选择。
+    if [ -f /etc/tailscale/routes-manual ]; then
+        [ "$(cat /etc/tailscale/routes-manual 2>/dev/null)" = "$CUR" ] && return 0
+        rm -f /etc/tailscale/routes-manual
+    fi
+    [ "$CUR" = "$(cat /etc/tailscale/advertised 2>/dev/null)" ] && return 0
+    [ -f /tmp/ts-readvertise.lock ] && return 0
+
+    _last=$(cat /tmp/ts-readvertise.last 2>/dev/null || echo 0)
+    _now=$(date +%s)
+    [ $((_now - _last)) -lt 600 ] && return 0
+
+    date +%s >/tmp/ts-readvertise.last
+    : >/tmp/ts-readvertise.lock
+    (
+        # 没登录时不改 prefs：等 tailscale0 出现再动手，最多等 5 分钟。
+        _i=0
+        while [ "$_i" -lt 60 ]; do
+            _ip=$(ip -4 addr show dev tailscale0 2>/dev/null \
+                | sed -n 's/.*inet \([0-9.]*\)\/[0-9]*.*/\1/p' | head -n 1)
+            [ -n "$_ip" ] && break
+            sleep 5
+            _i=$((_i + 1))
+        done
+        if [ -n "$_ip" ]; then
+            tailscale set --advertise-routes="$CUR" >/tmp/ts_readvertise.log 2>&1 \
+                && echo "$CUR" > /etc/tailscale/advertised
+        fi
+        rm -f /tmp/ts-readvertise.lock
+    ) &
+}
+
 (
     while true; do
         CUR=$(lan_cidr)
-        [ -n "$CUR" ] && echo "$CUR" > /etc/tailscale/lan-cidr
+        if [ -n "$CUR" ]; then
+            echo "$CUR" > /etc/tailscale/lan-cidr
+            apply_cidr "$CUR"
+        fi
         ts_collect
         sleep 15
     done

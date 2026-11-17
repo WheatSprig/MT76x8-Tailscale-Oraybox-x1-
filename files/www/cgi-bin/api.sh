@@ -137,7 +137,8 @@ if [ "$OP" = "status" ]; then
     MEM_TOTAL=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
     MEM_FREE=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
 
-    TS_ROUTES=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
+    TS_ROUTES=$(head -n 1 /etc/tailscale/advertised 2>/dev/null)
+    [ -n "$TS_ROUTES" ] || TS_ROUTES=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
 
     PRN_ENABLED=$(uci -q get p910nd.printer.enabled)
     [ -n "$PRN_ENABLED" ] || PRN_ENABLED=0
@@ -364,8 +365,10 @@ case "$OP" in
     ts_routes)
         CIDR=$(param cidr)
         if [ -z "$CIDR" ]; then
-            run_limited 20 tailscale set --advertise-routes= >/dev/null 2>&1
-            : > /etc/tailscale/lan-cidr
+            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1
+            : > /etc/tailscale/advertised
+            # 告诉开机循环：这个 LAN 网段已经被人工处理过，不要自动加回去。
+            cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
             ok "已停止发布子网路由"
         fi
         printf '%s' "$CIDR" | grep -Eq \
@@ -373,7 +376,10 @@ case "$OP" in
             || fail "网段格式不正确，示例：192.168.1.0/24"
         run_limited 150 tailscale set --advertise-routes="$CIDR" >/dev/null 2>&1 \
             || fail "设置失败：节点可能尚未登录"
-        echo "$CIDR" > /etc/tailscale/lan-cidr
+        echo "$CIDR" > /etc/tailscale/advertised
+        # 记录「这个 LAN 网段已经人工处理过」：开机循环不会再用 LAN 网段覆盖；
+        # 只有 LAN 真的变了才会重新接管。
+        cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
         ok "已发布 $CIDR，记得在 Tailscale 后台批准"
         ;;
 
@@ -382,6 +388,25 @@ case "$OP" in
             || fail "开启失败：$(tail -n 2 /tmp/ts_serve.log 2>/dev/null)"
         ok "已开启 HTTPS 访问（需 tailnet 启用 HTTPS Certificates）"
         ;;
+
+    ts_routes_toggle)
+        CUR=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
+        NOW=$(head -n 1 /etc/tailscale/advertised 2>/dev/null)
+        if [ -n "$NOW" ]; then
+            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1 \
+                || fail "关闭失败：节点可能尚未登录"
+            : > /etc/tailscale/advertised
+            # 让开机循环知道「这个 LAN 是人工关掉的」，不要自动加回去。
+            cat /etc/tailscale/lan-cidr > /etc/tailscale/routes-manual 2>/dev/null
+            ok "已停止广播子网路由"
+        fi
+        [ -n "$CUR" ] || fail "还没拿到 LAN 地址，稍后再试"
+        run_limited 150 tailscale set --advertise-routes="$CUR" >/dev/null 2>&1 \
+            || fail "开启失败：节点可能尚未登录"
+        echo "$CUR" > /etc/tailscale/advertised
+        rm -f /etc/tailscale/routes-manual
+        ok "已开始广播 $CUR（需在后台批准）"
+        ;; 
 
     printer_toggle)
         uci -q set p910nd.printer=p910nd
