@@ -7,17 +7,34 @@
 <title>mt76x8 控制台</title>
 <style>
   :root {
+    color-scheme: light;
+    --bg: #f2f5fa;
+    --panel: #ffffff;
+    --panel-2: #f7f9fc;
+    --line: #e2e8f0;
+    --text: #16233a;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --accent-soft: rgba(37, 99, 235, .1);
+    --ok: #059669;
+    --warn: #b45309;
+    --bad: #dc2626;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .04);
+  }
+  body[data-theme="dark"] {
     color-scheme: dark;
     --bg: #0b1220;
     --panel: #111c31;
     --panel-2: #16233c;
-    --line: rgba(148, 163, 184, .14);
+    --line: rgba(148, 163, 184, .16);
     --text: #e6edf9;
     --muted: #8ba0c2;
     --accent: #3b82f6;
+    --accent-soft: rgba(59, 130, 246, .16);
     --ok: #34d399;
     --warn: #fbbf24;
     --bad: #f87171;
+    --shadow: none;
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
@@ -36,7 +53,7 @@
   .sidebar {
     display: flex; flex-direction: column; gap: 18px;
     padding: 22px 14px; border-right: 1px solid var(--line);
-    background: linear-gradient(180deg, #0d1628, #0b1220);
+    background: var(--panel);
     position: sticky; top: 0; height: 100vh;
   }
   .brand { display: flex; gap: 10px; align-items: center; padding: 0 8px; }
@@ -54,8 +71,8 @@
     color: var(--muted); text-decoration: none; font-size: 13.5px;
   }
   nav a svg { width: 18px; height: 18px; flex: 0 0 auto; opacity: .9; }
-  nav a:hover { background: rgba(255,255,255,.04); color: var(--text); }
-  nav a.active { background: rgba(59,130,246,.14); color: #cfe0ff; }
+  nav a:hover { background: var(--panel-2); color: var(--text); }
+  nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .side-foot { margin-top: auto; padding: 0 8px; }
 
   /* ---------------- 顶栏 ---------------- */
@@ -65,7 +82,7 @@
   .top-actions { display: flex; align-items: center; gap: 10px; }
   .icon-btn {
     width: 32px; height: 32px; border-radius: 9px; cursor: pointer;
-    border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--muted);
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
   }
   .icon-btn:hover { color: var(--text); border-color: rgba(148,163,184,.3); }
 
@@ -92,13 +109,13 @@
   .grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .card {
     padding: 18px; border: 1px solid var(--line); border-radius: 14px;
-    background: var(--panel);
+    background: var(--panel); box-shadow: var(--shadow);
   }
   .card h2 {
     margin: 0 0 14px; font-size: 12px; font-weight: 700; letter-spacing: .1em;
-    text-transform: uppercase; color: #7dd3fc;
+    text-transform: uppercase; color: var(--accent);
   }
-  .row { display: flex; justify-content: space-between; gap: 14px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.05); }
+  .row { display: flex; justify-content: space-between; gap: 14px; padding: 8px 0; border-top: 1px solid var(--line); }
   .row:first-of-type { border-top: 0; }
   .row .k { color: var(--muted); font-size: 13px; flex: 0 0 auto; }
   .row .v { text-align: right; word-break: break-all; }
@@ -114,7 +131,7 @@
   .big .num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .big .lbl { color: var(--muted); font-size: 12px; }
 
-  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; margin-top: 8px; }
+  .bar { height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; margin-top: 8px; }
   .bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #22d3ee); }
 
   /* ---------------- 控件 ---------------- */
@@ -123,7 +140,7 @@
     background: var(--accent); color: #fff; font-weight: 700; font-size: 13.5px;
   }
   .btn:active { filter: brightness(.92); }
-  .btn.ghost { background: rgba(255,255,255,.06); color: #cbd5e1; border: 1px solid var(--line); }
+  .btn.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
   .btn.danger { background: #b91c1c; }
   .btn.small { padding: 7px 11px; font-size: 12.5px; }
   .btn[disabled] { opacity: .45; cursor: default; }
@@ -132,21 +149,21 @@
   input {
     flex: 1 1 auto; min-width: 0; padding: 9px 12px;
     border: 1px solid var(--line); border-radius: 9px;
-    background: #0b1526; color: var(--text);
+    background: var(--panel-2); color: var(--text);
   }
   input:focus { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
   .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
   pre {
     margin: 12px 0 0; padding: 12px; max-height: 340px; overflow: auto;
-    background: #060d18; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
     font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
   }
 
   /* ---------------- 登录弹层 ---------------- */
   .modal {
     position: fixed; inset: 0; display: grid; place-items: center; padding: 20px;
-    background: rgba(3, 7, 15, .72); backdrop-filter: blur(3px); z-index: 20;
+    background: rgba(15, 23, 42, .35); backdrop-filter: blur(3px); z-index: 20;
   }
   .modal .box { width: 100%; max-width: 360px; padding: 22px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); }
   .modal h2 { margin: 0 0 6px; font-size: 17px; }
@@ -155,7 +172,7 @@
   #toast {
     position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(80px);
     max-width: 88vw; padding: 10px 16px; border-radius: 10px; z-index: 30;
-    background: #1e293b; border: 1px solid var(--line); font-size: 13px;
+    background: var(--panel); color: var(--text); border: 1px solid var(--line); font-size: 13px; box-shadow: var(--shadow);
     opacity: 0; transition: .2s; pointer-events: none;
   }
   #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
@@ -172,7 +189,7 @@
       position: fixed; left: 0; right: 0; bottom: 0; top: auto; height: auto;
       flex-direction: row; align-items: center; padding: 6px 4px 8px;
       border-right: 0; border-top: 1px solid var(--line);
-      background: #0b1424; z-index: 10;
+      background: var(--panel); z-index: 10;
     }
     .brand, .side-foot { display: none; }
     nav { flex-direction: row; flex: 1; justify-content: space-around; }
@@ -221,6 +238,7 @@
       <h1 id="page-title">概览</h1>
       <div class="top-actions">
         <span class="mono" id="top-ip" style="color:var(--muted);font-size:12.5px"></span>
+        <button class="icon-btn" id="btn-theme" title="切换深色 / 浅色">☀</button>
         <button class="icon-btn" id="btn-refresh" title="刷新">⟳</button>
       </div>
     </div>
@@ -388,12 +406,11 @@
           <div class="row"><span class="k">存储</span><span class="v mono" id="sys-storage">—</span></div>
         </div>
         <div class="card">
-          <h2>诊断</h2>
-          <div class="actions" style="margin-top:0">
-            <button class="btn ghost small" data-act="show_logs">系统日志</button>
-            <button class="btn ghost small" data-act="show_diag">完整诊断</button>
-          </div>
-          <p class="hint">反馈问题时把「提交」和「构建号」一起贴出来，就能定位到具体镜像。</p>
+          <h2>说明</h2>
+          <p class="hint" style="margin-top:0">
+            反馈问题时把「提交」和「构建号」一起贴出来，就能定位到具体镜像。
+            日志与诊断在下方「维护」里。
+          </p>
         </div>
       </div>
       <div class="card" style="margin-top:14px">
@@ -795,6 +812,27 @@
   }
 
   $('btn-upgrade').addEventListener('click', startUpgrade);
+
+  // ---------------- 主题 ----------------
+  function applyTheme(t) {
+    document.body.setAttribute('data-theme', t);
+    $('btn-theme').textContent = t === 'dark' ? '☀' : '🌙';
+    try { localStorage.setItem('theme', t); } catch (e) {}
+  }
+
+  (function initTheme() {
+    var saved = '';
+    try { saved = localStorage.getItem('theme') || ''; } catch (e) {}
+    if (!saved) {
+      saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'dark' : 'light';
+    }
+    applyTheme(saved);
+  })();
+
+  $('btn-theme').addEventListener('click', function () {
+    applyTheme(document.body.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
 
   // ---------------- 启动 ----------------
   go((location.hash || '#/overview').replace('#/', ''));
