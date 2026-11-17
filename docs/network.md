@@ -65,6 +65,18 @@ reload_config
 > 内网设备回包时会发给主路由。Tailscale 的 `--snat-subnet-routes`（默认开启）
 > 会把来自 Tailnet 的流量源地址伪装成本机的局域网地址，于是内网设备直接把
 > 回包发给本机，不经过主路由的路由表。
+>
+> SNAT 依赖 `xt_MASQUERADE`。早期镜像只装了 `iptables-nft`，缺
+> `kmod-ipt-nat`，tailscaled 会报
+> `health(warnable=router): ... Extension MASQUERADE ... missing kernel module`，
+> 表现是客户端能发包但收不到回包（网页打不开、ping 不通）。现在镜像里已经
+> 带上 `kmod-ipt-nat`、`kmod-ipt-conntrack` 和 `iptables-mod-conntrack-extra`。
+> 自查：
+>
+> ```sh
+> nft list chain inet fw4 ts-postrouting   # 应该有 -j MASQUERADE
+> logread | grep -i 'warnable=router'      # 应该没有 MASQUERADE 报错
+> ```
 
 **还需要手动批准路由**：Tailscale 管理后台 → **Machines** → 找到
 `mt76x8` → 右侧 `...` → **Edit route settings** → 勾选实际网段

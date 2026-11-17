@@ -333,6 +333,7 @@ jobs:
           # /lib/libustream-ssl.so。两个都要 negate。
           PACKAGES="ca-bundle kmod-tun iptables-nft uhttpd \
             kmod-usb-printer p910nd \
+            kmod-ipt-nat kmod-ipt-conntrack iptables-mod-conntrack-extra \
             wpad-basic-mbedtls libustream-mbedtls20201210 \
             -wpad-basic-openssl -libustream-openssl -libustream-openssl20201210 \
             -luci -luci-ssl -luci-app-firewall \
