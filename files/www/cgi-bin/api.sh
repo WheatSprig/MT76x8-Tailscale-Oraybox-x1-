@@ -83,46 +83,8 @@ param() {
 
 # ---------------------------------------------------------------- 登录状态
 
-load_password() {
-    SALT=""
-    PHASH=""
-    if [ -s "$PASSWORD_FILE" ]; then
-        SALT=$(cut -d: -f1 "$PASSWORD_FILE" 2>/dev/null)
-        PHASH=$(cut -d: -f2 "$PASSWORD_FILE" 2>/dev/null)
-    fi
-}
-
-password_ok() {
-    [ -n "$SALT" ] || return 1
-    _calc=$(printf '%s:%s' "$SALT" "$1" | sha256sum | cut -d' ' -f1)
-    [ "$_calc" = "$PHASH" ]
-}
-
-new_token() {
-    cat /proc/sys/kernel/random/uuid 2>/dev/null || date +%s%N
-}
-
-request_token() {
-    printf '%s' "$HTTP_COOKIE" \
-        | tr ';' '\n' \
-        | sed -n 's/^[[:space:]]*tsui=//p' \
-        | head -n 1
-}
-
-auth_ok() {
-    _t=$(request_token)
-    [ -n "$_t" ] || return 1
-    [ -f "$TOKEN_FILE" ] || return 1
-    grep -qxF "$_t" "$TOKEN_FILE"
-}
-
-drop_token() {
-    _t=$(request_token)
-    [ -n "$_t" ] || return 0
-    [ -f "$TOKEN_FILE" ] || return 0
-    grep -vxF "$_t" "$TOKEN_FILE" >"$TOKEN_FILE.$$" 2>/dev/null
-    mv "$TOKEN_FILE.$$" "$TOKEN_FILE" 2>/dev/null
-}
+# 登录态与密码校验和 upgrade.sh 共用一份实现。
+. /usr/lib/tsui.sh
 
 # ---------------------------------------------------------------- 状态采集
 
@@ -237,6 +199,53 @@ EOF
 fi
 
 # ---------------------------------------------------------------- 需要登录
+
+if [ "$OP" = "net" ]; then
+    auth_ok || fail "请先登录"
+    DNS=$(awk '/^nameserver/ {printf "%s ", $2}' /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null)
+    [ -n "$DNS" ] || DNS=$(awk '/^nameserver/ {printf "%s ", $2}' /etc/resolv.conf 2>/dev/null)
+    MAC=$(cat /sys/class/net/br-lan/address 2>/dev/null)
+    PORTS=$(netstat -ltn 2>/dev/null | awk 'NR > 2 { split($4, a, ":"); print a[length(a)] }' | sort -n -u | tr '\n' ' ')
+    json_header
+    printf '\r\n'
+    cat <<EOF
+{
+  "ok": true,
+  "dns": "$(json_escape "$DNS")",
+  "mac": "$(json_escape "$MAC")",
+  "ports": "$(json_escape "$PORTS")"
+}
+EOF
+    exit 0
+fi
+
+if [ "$OP" = "system" ]; then
+    auth_ok || fail "请先登录"
+    MODEL=$(cat /tmp/sysinfo/model 2>/dev/null)
+    RELEASE=$(sed -n "s/^DISTRIB_DESCRIPTION='\(.*\)'/\1/p" /etc/openwrt_release 2>/dev/null)
+    KERNEL=$(uname -r 2>/dev/null)
+    UPTIME=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    MEM_TOTAL=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    MEM_FREE=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    LOAD=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null)
+    STORAGE=$(df -h /overlay 2>/dev/null | tail -n 1 | awk '{print $4 " 可用 / " $2}')
+    json_header
+    printf '\r\n'
+    cat <<EOF
+{
+  "ok": true,
+  "model": "$(json_escape "$MODEL")",
+  "release": "$(json_escape "$RELEASE")",
+  "kernel": "$(json_escape "$KERNEL")",
+  "uptime": "$(json_escape "$UPTIME")",
+  "mem_total": "$(json_escape "$MEM_TOTAL")",
+  "mem_free": "$(json_escape "$MEM_FREE")",
+  "load": "$(json_escape "$LOAD")",
+  "storage": "$(json_escape "$STORAGE")"
+}
+EOF
+    exit 0
+fi
 
 if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
     auth_ok || fail "请先登录"

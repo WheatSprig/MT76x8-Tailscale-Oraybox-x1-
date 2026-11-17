@@ -118,9 +118,9 @@ if [ -f /etc/config/uhttpd ]; then
     uci -q set uhttpd.main.cgi_prefix='/cgi-bin'
     # 不列目录（uhttpd 默认就按 index.html 作为首页）。
     uci -q set uhttpd.main.no_dirlists='1'
-    # 慢请求不允许多占槽位；诊断接口最多跑 30 秒。
+    # 慢请求不允许多占槽位；固件上传要留足时间（12MB 经 Wi-Fi 可能要一分钟）。
     uci -q set uhttpd.main.max_requests='8'
-    uci -q set uhttpd.main.script_timeout='35'
+    uci -q set uhttpd.main.script_timeout='180'
     uci -q commit uhttpd
     /etc/init.d/uhttpd enable
     /etc/init.d/uhttpd restart >/dev/null 2>&1

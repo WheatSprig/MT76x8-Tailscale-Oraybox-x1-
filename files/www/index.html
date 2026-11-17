@@ -3,236 +3,575 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#0b1220">
-<title>MT76x8 控制台</title>
+<meta name="theme-color" content="#0f172a">
+<title>mt76x8 控制台</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b1220;
+    --panel: #111c31;
+    --panel-2: #16233c;
+    --line: rgba(148, 163, 184, .14);
+    --text: #e6edf9;
+    --muted: #8ba0c2;
+    --accent: #3b82f6;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; padding: 16px 14px 48px;
-    background: #0b1220; color: #e8eefc;
+    margin: 0; background: var(--bg); color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
                  "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    font-size: 15px; line-height: 1.6;
+    font-size: 14px; line-height: 1.6;
   }
-  main { max-width: 560px; margin: 0 auto; }
-  header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  h1 { margin: 4px 0 2px; font-size: 20px; }
-  .sub { margin: 0 0 16px; color: #7f90ad; font-size: 12px; }
-  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.15); color: #9fb0cc; }
-  .pill.ok { color: #4ade80; border-color: rgba(74,222,128,.35); }
-  .pill.warn { color: #f6c177; border-color: rgba(246,193,119,.35); }
-  .pill.bad { color: #f87171; border-color: rgba(248,113,113,.35); }
+  button, input { font: inherit; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .app { display: grid; grid-template-columns: 232px 1fr; min-height: 100%; }
+
+  /* ---------------- 侧栏 ---------------- */
+  .sidebar {
+    display: flex; flex-direction: column; gap: 18px;
+    padding: 22px 14px; border-right: 1px solid var(--line);
+    background: linear-gradient(180deg, #0d1628, #0b1220);
+    position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; gap: 10px; align-items: center; padding: 0 8px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 10px; flex: 0 0 auto;
+    background: linear-gradient(135deg, var(--accent), #22d3ee);
+    display: grid; place-items: center; font-weight: 800; color: #06121f;
+  }
+  .brand strong { display: block; font-size: 15px; letter-spacing: .02em; }
+  .brand small { color: var(--muted); font-size: 11px; }
+  nav { display: flex; flex-direction: column; gap: 2px; }
+  nav a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border-radius: 9px;
+    color: var(--muted); text-decoration: none; font-size: 13.5px;
+  }
+  nav a svg { width: 18px; height: 18px; flex: 0 0 auto; opacity: .9; }
+  nav a:hover { background: rgba(255,255,255,.04); color: var(--text); }
+  nav a.active { background: rgba(59,130,246,.14); color: #cfe0ff; }
+  .side-foot { margin-top: auto; padding: 0 8px; }
+
+  /* ---------------- 顶栏 ---------------- */
+  main { min-width: 0; padding: 20px 22px 48px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .topbar h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .01em; }
+  .top-actions { display: flex; align-items: center; gap: 10px; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--muted);
+  }
+  .icon-btn:hover { color: var(--text); border-color: rgba(148,163,184,.3); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.ok { color: var(--ok); border-color: rgba(52,211,153,.35); }
+  .pill.warn { color: var(--warn); border-color: rgba(251,191,36,.35); }
+  .pill.bad { color: var(--bad); border-color: rgba(248,113,113,.35); }
+
+  .banner {
+    margin: 14px 0 0; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+    background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25); color: #fcd34d;
+  }
+  .banner.info { background: rgba(59,130,246,.08); border-color: rgba(59,130,246,.25); color: #bfdbfe; }
+  .banner a { color: inherit; font-weight: 700; }
+
+  /* ---------------- 卡片 ---------------- */
+  .grid { display: grid; gap: 14px; margin-top: 16px; }
+  .grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .card {
-    margin: 0 0 14px; padding: 16px;
-    border: 1px solid rgba(120,160,255,.16); border-radius: 14px;
-    background: rgba(18,27,46,.9);
+    padding: 18px; border: 1px solid var(--line); border-radius: 14px;
+    background: var(--panel);
   }
   .card h2 {
-    margin: 0 0 12px; font-size: 13px; font-weight: 700;
-    letter-spacing: .08em; color: #7dd3fc; text-transform: uppercase;
+    margin: 0 0 14px; font-size: 12px; font-weight: 700; letter-spacing: .1em;
+    text-transform: uppercase; color: #7dd3fc;
   }
-  .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,.05); }
+  .row { display: flex; justify-content: space-between; gap: 14px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.05); }
   .row:first-of-type { border-top: 0; }
-  .k { color: #8ea3c7; font-size: 13px; flex: 0 0 auto; }
-  .v { text-align: right; word-break: break-all; font-variant-numeric: tabular-nums; }
-  .ok { color: #4ade80; } .warn { color: #f6c177; } .bad { color: #f87171; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
-  .field { display: flex; gap: 8px; margin-top: 10px; }
-  input {
-    flex: 1 1 auto; min-width: 0; padding: 10px 12px;
-    border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
-    background: #0e1729; color: inherit; font-size: 14px; font-family: inherit;
-  }
-  input:focus { outline: 2px solid rgba(37,99,235,.55); outline-offset: 1px; }
+  .row .k { color: var(--muted); font-size: 13px; flex: 0 0 auto; }
+  .row .v { text-align: right; word-break: break-all; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+
+  .hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .hero .state { font-size: 26px; font-weight: 800; letter-spacing: .01em; }
+  .hero .ip { margin-top: 6px; font-size: 15px; color: var(--muted); }
+  .hero .ip b { color: var(--text); font-weight: 600; }
+  .hero-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .big { display: flex; flex-direction: column; gap: 2px; }
+  .big .num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .big .lbl { color: var(--muted); font-size: 12px; }
+
+  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #22d3ee); }
+
+  /* ---------------- 控件 ---------------- */
   .btn {
-    flex: 0 0 auto; padding: 10px 14px; border: 0; border-radius: 9px; cursor: pointer;
-    background: #2563eb; color: #fff; font-size: 14px; font-weight: 700;
-    font-family: inherit; text-decoration: none; display: inline-block; text-align: center;
+    padding: 9px 14px; border: 0; border-radius: 9px; cursor: pointer;
+    background: var(--accent); color: #fff; font-weight: 700; font-size: 13.5px;
   }
   .btn:active { filter: brightness(.92); }
-  .btn.ghost { background: rgba(255,255,255,.08); color: #cfe0ff; }
+  .btn.ghost { background: rgba(255,255,255,.06); color: #cbd5e1; border: 1px solid var(--line); }
   .btn.danger { background: #b91c1c; }
-  .btn.small { padding: 7px 11px; font-size: 13px; }
-  .btn.block { width: 100%; }
+  .btn.small { padding: 7px 11px; font-size: 12.5px; }
+  .btn[disabled] { opacity: .45; cursor: default; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .hint { margin: 10px 0 0; color: #7f90ad; font-size: 12px; line-height: 1.55; }
-  .alert {
-    margin: 0 0 14px; padding: 10px 14px; border-radius: 10px;
-    background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.26);
-    color: #f6c177; font-size: 13px; line-height: 1.6;
+  .field { display: flex; gap: 8px; margin-top: 10px; }
+  input {
+    flex: 1 1 auto; min-width: 0; padding: 9px 12px;
+    border: 1px solid var(--line); border-radius: 9px;
+    background: #0b1526; color: var(--text);
   }
-  .authbanner {
-    display: block; margin: 0 0 14px; padding: 14px 16px; border-radius: 12px;
-    background: linear-gradient(135deg, #2563eb, #06b6d4); color: #fff;
-    font-weight: 700; text-decoration: none; text-align: center;
-  }
+  input:focus { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
+  .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
   pre {
-    margin: 12px 0 0; padding: 12px; max-height: 320px; overflow: auto;
-    background: #05080f; border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+    margin: 12px 0 0; padding: 12px; max-height: 340px; overflow: auto;
+    background: #060d18; border: 1px solid var(--line); border-radius: 10px;
     font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
   }
-  .hide { display: none !important; }
+
+  /* ---------------- 登录弹层 ---------------- */
+  .modal {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: 20px;
+    background: rgba(3, 7, 15, .72); backdrop-filter: blur(3px); z-index: 20;
+  }
+  .modal .box { width: 100%; max-width: 360px; padding: 22px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); }
+  .modal h2 { margin: 0 0 6px; font-size: 17px; }
+  .modal p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+
   #toast {
-    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(80px);
-    max-width: 88vw; padding: 10px 16px; border-radius: 10px;
-    background: #1e293b; border: 1px solid rgba(255,255,255,.12);
-    font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; z-index: 9;
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(80px);
+    max-width: 88vw; padding: 10px 16px; border-radius: 10px; z-index: 30;
+    background: #1e293b; border: 1px solid var(--line); font-size: 13px;
+    opacity: 0; transition: .2s; pointer-events: none;
   }
   #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+  .hide { display: none !important; }
+
+  /* ---------------- 手机 ---------------- */
+  @media (max-width: 860px) {
+    .grid.c3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    .sidebar {
+      position: fixed; left: 0; right: 0; bottom: 0; top: auto; height: auto;
+      flex-direction: row; align-items: center; padding: 6px 4px 8px;
+      border-right: 0; border-top: 1px solid var(--line);
+      background: #0b1424; z-index: 10;
+    }
+    .brand, .side-foot { display: none; }
+    nav { flex-direction: row; flex: 1; justify-content: space-around; }
+    nav a { flex-direction: column; gap: 3px; padding: 6px 8px; font-size: 10.5px; }
+    nav a svg { width: 20px; height: 20px; }
+    main { padding: 16px 14px 92px; }
+    .grid.c2, .grid.c3 { grid-template-columns: 1fr; }
+    .hero .state { font-size: 22px; }
+  }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <div>
-      <h1>MT76x8 控制台</h1>
-      <p class="sub">Tailscale 子网路由 · USB 打印共享</p>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">M</div>
+      <div><strong>mt76x8</strong><br><small>OrayBox X1</small></div>
     </div>
-    <span class="pill" id="pill">连接中…</span>
-  </header>
+    <nav id="nav">
+      <a href="#/overview" data-page="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        概览
+      </a>
+      <a href="#/network" data-page="network">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/></svg>
+        网络
+      </a>
+      <a href="#/tailscale" data-page="tailscale">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg>
+        Tailscale
+      </a>
+      <a href="#/printer" data-page="printer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 17h12v4H6z"/></svg>
+        打印
+      </a>
+      <a href="#/system" data-page="system">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.4 3H9.6l-.4 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 2.6h4.8l.4-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6c.1-.3.1-.7.1-1z"/></svg>
+        系统
+      </a>
+    </nav>
+    <div class="side-foot"><span class="pill" id="side-pill">连接中…</span></div>
+  </aside>
 
-  <div id="alert-default" class="alert hide">
-    仍在使用默认密码（<span class="mono">mt76x8</span>），请登录后到「安全」里修改。
-  </div>
+  <main>
+    <div class="topbar">
+      <h1 id="page-title">概览</h1>
+      <div class="top-actions">
+        <span class="mono" id="top-ip" style="color:var(--muted);font-size:12.5px"></span>
+        <button class="icon-btn" id="btn-refresh" title="刷新">⟳</button>
+      </div>
+    </div>
 
-  <a id="auth-url" class="authbanner hide" target="_blank" rel="noreferrer">打开 Tailscale 授权页面 →</a>
+    <div id="banner" class="banner hide"></div>
 
-  <section class="card">
-    <h2>状态</h2>
-    <div class="row"><span class="k">Tailscale</span><span class="v" id="ts-state">—</span></div>
-    <div class="row"><span class="k">Tailscale IP</span><span class="v mono" id="ts-ip">—</span></div>
-    <div class="row"><span class="k">发布网段</span><span class="v mono" id="ts-routes">—</span></div>
-    <div class="row"><span class="k">本机地址</span><span class="v mono" id="lan-ip">—</span></div>
-    <div class="row"><span class="k">网关</span><span class="v mono" id="lan-gw">—</span></div>
-    <div class="row"><span class="k">内存 / 运行时间</span><span class="v mono" id="sys-info">—</span></div>
-  </section>
+    <!-- 概览 -->
+    <section class="page" id="page-overview">
+      <div class="card" style="margin-top:16px">
+        <div class="hero">
+          <div>
+            <div class="state" id="ov-state">—</div>
+            <div class="ip">Tailscale <b class="mono" id="ov-tsip">—</b>
+              <button class="btn ghost small" id="btn-copy-ip" style="margin-left:6px">复制</button>
+            </div>
+            <div class="ip">局域网 <b class="mono" id="ov-lanip">—</b></div>
+          </div>
+          <div class="hero-actions">
+            <button class="btn" data-act="login">登录 Tailscale</button>
+            <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
+          </div>
+        </div>
+      </div>
 
-  <section class="card" id="login-card">
-    <h2>登录</h2>
-    <p class="hint" style="margin:0 0 6px">用户名固定为 <span class="mono">root</span>，密码与 SSH 相同。</p>
-    <div class="field">
+      <div class="grid c2">
+        <div class="card">
+          <h2>运行状态</h2>
+          <div class="big">
+            <span class="num" id="ov-uptime">—</span>
+            <span class="lbl">已运行</span>
+          </div>
+          <div class="big" style="margin-top:14px">
+            <span class="num" id="ov-mem">—</span>
+            <span class="lbl">可用内存</span>
+            <div class="bar"><i id="ov-membar" style="width:0%"></i></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>服务</h2>
+          <div class="row"><span class="k">子网路由</span><span class="v mono" id="ov-routes">—</span></div>
+          <div class="row"><span class="k">打印服务</span><span class="v" id="ov-printer">—</span></div>
+          <div class="row"><span class="k">打印机</span><span class="v" id="ov-printer-dev">—</span></div>
+          <div class="row"><span class="k">控制台</span><span class="v" id="ov-auth">—</span></div>
+        </div>
+      </div>
+
+      <div class="card hide" id="ov-auth-banner" style="margin-top:14px">
+        <h2>Tailscale 授权</h2>
+        <p class="hint" id="ov-auth-text">授权链接生成后会自动出现。</p>
+        <a class="btn" id="ov-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
+      </div>
+    </section>
+
+    <!-- 网络 -->
+    <section class="page hide" id="page-network">
+      <div class="grid c2" style="margin-top:16px">
+        <div class="card">
+          <h2>局域网</h2>
+          <div class="row"><span class="k">模式</span><span class="v mono" id="net-proto">—</span></div>
+          <div class="row"><span class="k">地址</span><span class="v mono" id="net-ip">—</span></div>
+          <div class="row"><span class="k">网关</span><span class="v mono" id="net-gw">—</span></div>
+          <div class="row"><span class="k">DNS</span><span class="v mono" id="net-dns">—</span></div>
+          <div class="row"><span class="k">MAC</span><span class="v mono" id="net-mac">—</span></div>
+        </div>
+        <div class="card">
+          <h2>Tailscale</h2>
+          <div class="row"><span class="k">接口地址</span><span class="v mono" id="net-tsip">—</span></div>
+          <div class="row"><span class="k">发布网段</span><span class="v mono" id="net-routes">—</span></div>
+          <div class="row"><span class="k">主机名</span><span class="v mono" id="net-host">—</span></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>监听端口</h2>
+        <pre id="net-ports" style="margin-top:0">读取中…</pre>
+        <p class="hint">只露出 80 / 8080（控制台）、22（SSH）、9100（打印）。</p>
+      </div>
+    </section>
+
+    <!-- Tailscale -->
+    <section class="page hide" id="page-tailscale">
+      <div class="card" style="margin-top:16px">
+        <h2>节点</h2>
+        <div class="row"><span class="k">状态</span><span class="v" id="ts-state">—</span></div>
+        <div class="row"><span class="k">Tailscale IP</span><span class="v mono" id="ts-ip">—</span></div>
+        <div class="row"><span class="k">主机名</span><span class="v mono" id="ts-host">—</span></div>
+        <div class="row"><span class="k">发布网段</span><span class="v mono" id="ts-routes">—</span></div>
+        <div class="actions">
+          <button class="btn" data-act="login">登录 / 重新授权</button>
+          <button class="btn ghost small" data-act="ts_serve">开启 HTTPS 访问</button>
+          <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>子网路由</h2>
+        <div class="field">
+          <input id="routes-input" placeholder="192.168.1.0/24" autocomplete="off">
+          <button class="btn small" data-act="ts_routes">保存</button>
+        </div>
+        <p class="hint">保存后还要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
+      </div>
+      <div class="card hide" id="ts-auth-card" style="margin-top:14px">
+        <h2>等待授权</h2>
+        <a class="btn" id="ts-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
+        <p class="hint">授权链接 10~40 秒内生成，过期就回概览重新点一次登录。</p>
+      </div>
+    </section>
+
+    <!-- 打印 -->
+    <section class="page hide" id="page-printer">
+      <div class="grid c2" style="margin-top:16px">
+        <div class="card">
+          <h2>服务</h2>
+          <div class="row"><span class="k">状态</span><span class="v" id="prn-state">—</span></div>
+          <div class="row"><span class="k">设备节点</span><span class="v mono" id="prn-dev">—</span></div>
+          <div class="row"><span class="k">打印机</span><span class="v" id="prn-present">—</span></div>
+          <div class="row"><span class="k">监听</span><span class="v mono" id="prn-port">—</span></div>
+        </div>
+        <div class="card">
+          <h2>快捷操作</h2>
+          <div class="actions" style="margin-top:0">
+            <button class="btn small" data-act="printer_toggle">启用 / 停用</button>
+            <button class="btn ghost small" data-act="printer_restart">重启服务</button>
+          </div>
+          <p class="hint">添加打印机：TCP/IP + RAW 9100，或 <span class="mono">socket://本机 IP:9100</span>。</p>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>设备与端口</h2>
+        <div class="field">
+          <input id="prn-device-input" placeholder="/dev/usb/lp0" list="prn-devices" autocomplete="off">
+          <datalist id="prn-devices"></datalist>
+          <button class="btn small" data-act="printer_device">保存设备</button>
+        </div>
+        <div class="field">
+          <input id="prn-port-input" placeholder="0（表示 9100）" inputmode="numeric" autocomplete="off">
+          <button class="btn small" data-act="printer_port">保存端口</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 系统 -->
+    <section class="page hide" id="page-system">
+      <div class="grid c2" style="margin-top:16px">
+        <div class="card">
+          <h2>设备</h2>
+          <div class="row"><span class="k">型号</span><span class="v" id="sys-model">—</span></div>
+          <div class="row"><span class="k">固件</span><span class="v" id="sys-release">—</span></div>
+          <div class="row"><span class="k">内核</span><span class="v mono" id="sys-kernel">—</span></div>
+          <div class="row"><span class="k">运行时间</span><span class="v" id="sys-uptime">—</span></div>
+        </div>
+        <div class="card">
+          <h2>资源</h2>
+          <div class="row"><span class="k">内存</span><span class="v mono" id="sys-mem">—</span></div>
+          <div class="row"><span class="k">负载</span><span class="v mono" id="sys-load">—</span></div>
+          <div class="row"><span class="k">存储</span><span class="v mono" id="sys-storage">—</span></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>安全</h2>
+        <div class="field">
+          <input id="old-password" type="password" placeholder="当前密码" autocomplete="current-password">
+        </div>
+        <div class="field">
+          <input id="new-password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password">
+          <button class="btn small" data-act="set_password">修改</button>
+        </div>
+        <p class="hint">修改后会同时更新网页密码和 SSH root 密码。</p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>固件升级</h2>
+        <div class="field" style="margin-top:0">
+          <input type="file" id="fw-file" accept=".bin">
+        </div>
+        <div class="bar"><i id="fw-progress" style="width:0%"></i></div>
+        <div class="actions">
+          <button class="btn small" id="btn-upgrade">上传并升级</button>
+        </div>
+        <p class="hint">
+          只接受本设备的 <span class="mono">*sysupgrade.bin</span>（≤15 MiB）。
+          升级会保留配置，约 2~3 分钟；<b>期间不能断电</b>。
+          建议用局域网地址访问，Tailscale 地址会被拒绝。
+        </p>
+        <p class="hint" id="fw-state"></p>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <h2>维护</h2>
+        <div class="actions" style="margin-top:0">
+          <button class="btn ghost small" data-act="show_logs">系统日志</button>
+          <button class="btn ghost small" data-act="show_diag">完整诊断</button>
+          <button class="btn ghost small" data-act="logout">退出控制台</button>
+          <button class="btn danger small" data-act="reboot" data-confirm="1">重启设备</button>
+        </div>
+        <pre id="diag-output" class="hide"></pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 登录 -->
+<div class="modal hide" id="login-modal">
+  <div class="box">
+    <h2>登录控制台</h2>
+    <p>用户名固定为 <span class="mono">root</span>，密码与 SSH 相同。</p>
+    <div class="field" style="margin-top:0">
       <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
-      <button class="btn" id="login-btn">登录</button>
     </div>
-  </section>
-
-  <section class="card hide auth-only">
-    <h2>Tailscale</h2>
     <div class="actions">
-      <button class="btn" data-act="ts_login">登录 / 重新授权</button>
-      <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
-      <button class="btn ghost small" data-act="ts_serve">开启 HTTPS 访问</button>
+      <button class="btn" id="login-btn" style="flex:1">登录</button>
+      <button class="btn ghost" id="login-cancel">稍后</button>
     </div>
-    <div class="field">
-      <input id="routes-input" placeholder="192.168.1.0/24" autocomplete="off">
-      <button class="btn small" data-act="ts_routes">保存网段</button>
-    </div>
-    <p class="hint">发布网段后需要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
-  </section>
-
-  <section class="card hide auth-only">
-    <h2>USB 打印机</h2>
-    <div class="row"><span class="k">服务状态</span><span class="v" id="prn-run">—</span></div>
-    <div class="row"><span class="k">设备节点</span><span class="v" id="prn-dev">—</span></div>
-    <div class="row"><span class="k">监听端口</span><span class="v mono" id="prn-port">—</span></div>
-    <div class="actions">
-      <button class="btn small" data-act="printer_toggle">启用 / 停用</button>
-      <button class="btn ghost small" data-act="printer_restart">重启服务</button>
-    </div>
-    <div class="field">
-      <input id="prn-device-input" placeholder="/dev/usb/lp0" list="prn-devices" autocomplete="off">
-      <datalist id="prn-devices"></datalist>
-      <button class="btn small" data-act="printer_device">保存设备</button>
-    </div>
-    <div class="field">
-      <input id="prn-port-input" placeholder="0（表示 9100）" inputmode="numeric" autocomplete="off">
-      <button class="btn small" data-act="printer_port">保存端口</button>
-    </div>
-    <p class="hint">电脑上添加打印机：TCP/IP + RAW 9100，或 <span class="mono">socket://本机地址:9100</span>。</p>
-  </section>
-
-  <section class="card hide auth-only">
-    <h2>诊断</h2>
-    <div class="actions">
-      <button class="btn ghost small" data-act="show_logs">系统日志</button>
-      <button class="btn ghost small" data-act="show_diag">完整诊断</button>
-    </div>
-    <pre id="diag-output" class="hide"></pre>
-  </section>
-
-  <section class="card hide auth-only">
-    <h2>安全</h2>
-    <div class="field">
-      <input id="old-password" type="password" placeholder="当前密码" autocomplete="current-password">
-    </div>
-    <div class="field">
-      <input id="new-password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password">
-      <button class="btn small" data-act="set_password">修改</button>
-    </div>
-    <p class="hint">修改后会同时更新网页密码和 SSH root 密码。</p>
-  </section>
-
-  <section class="card hide auth-only">
-    <h2>系统</h2>
-    <div class="actions">
-      <button class="btn ghost small" data-act="refresh">刷新</button>
-      <button class="btn ghost small" data-act="logout">退出控制台</button>
-      <button class="btn danger small" data-act="reboot" data-confirm="1">重启设备</button>
-    </div>
-  </section>
-</main>
+  </div>
+</div>
 
 <div id="toast"></div>
 
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var toastTimer = 0;
+  var state = { data: null, net: null, sys: null, authed: false, page: 'overview', timer: 0 };
+
+  var TITLES = {
+    overview: '概览', network: '网络', tailscale: 'Tailscale',
+    printer: '打印', system: '系统'
+  };
 
   function toast(msg) {
     var el = $('toast');
     el.textContent = msg;
     el.className = 'show';
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.className = ''; }, 3000);
+    clearTimeout(state.timer);
+    state.timer = setTimeout(function () { el.className = ''; }, 2800);
   }
 
-  function text(id, value, cls) {
-    var el = $(id);
-    if (!el) return;
-    el.textContent = value;
-    el.className = 'v' + (cls ? ' ' + cls : '');
+  function fmtUptime(sec) {
+    sec = parseInt(sec || 0, 10);
+    var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+    if (d) return d + ' 天 ' + h + ' 小时';
+    if (h) return h + ' 小时 ' + m + ' 分';
+    return m + ' 分';
   }
 
   function stateLabel(s) {
     if (s === 'Running') return ['已连接', 'ok'];
     if (s === 'NeedsLogin') return ['等待授权', 'warn'];
-    if (s === 'Stopped') return ['已停止', 'bad'];
     if (s === 'Starting') return ['启动中', 'warn'];
-    if (!s) return ['未知', 'warn'];
-    return [s, 'warn'];
+    if (s === 'Stopped') return ['已停止', 'bad'];
+    return ['未知', 'warn'];
   }
 
-  function render(j) {
+  function setText(id, text, cls) {
+    var el = $(id);
+    if (!el) return;
+    el.textContent = text;
+    if (cls !== undefined) el.className = 'v' + (cls ? ' ' + cls : '');
+  }
+
+  function setPill(el, label, cls) {
+    el.textContent = label;
+    el.className = 'pill ' + (cls || '');
+  }
+
+  // ---------------- 路由 ----------------
+  function go(page) {
+    if (!TITLES[page]) page = 'overview';
+    state.page = page;
+    if (location.hash !== '#/' + page) location.hash = '#/' + page;
+    Array.prototype.forEach.call(document.querySelectorAll('.page'), function (el) {
+      el.classList.toggle('hide', el.id !== 'page-' + page);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#nav a'), function (a) {
+      a.classList.toggle('active', a.getAttribute('data-page') === page);
+    });
+    $('page-title').textContent = TITLES[page];
+    if (page === 'network') loadNet();
+    if (page === 'system') loadSys();
+  }
+
+  window.addEventListener('hashchange', function () {
+    go((location.hash || '#/overview').replace('#/', ''));
+  });
+
+  // ---------------- 数据 ----------------
+  function getJSON(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); });
+  }
+
+  function post(op, extra) {
+    var body = new URLSearchParams();
+    body.set('op', op);
+    if (extra) Object.keys(extra).forEach(function (k) { body.set(k, extra[k]); });
+    return fetch('/cgi-bin/api.sh', { method: 'POST', body: body })
+      .then(function (r) { return r.json(); });
+  }
+
+  function renderStatus(j) {
+    state.data = j;
     var st = stateLabel(j.ts_state);
-    var pill = $('pill');
-    pill.textContent = st[0];
-    pill.className = 'pill ' + st[1];
+    setPill($('side-pill'), st[0], st[1]);
+    $('ov-state').textContent = st[0];
+    $('ov-state').className = 'state ' + (st[1] === 'ok' ? 'ok' : st[1] === 'bad' ? 'bad' : 'warn');
+    setText('ov-tsip', j.ts_ip || '—');
+    setText('ov-lanip', j.lan_ip || '—');
+    $('top-ip').textContent = j.ts_ip || j.lan_ip || '';
 
-    text('ts-state', st[0], st[1]);
-    text('ts-ip', j.ts_ip || '—');
-    text('ts-routes', j.ts_routes || '（未发布）');
-    text('lan-ip', j.lan_ip || '—');
-    text('lan-gw', j.lan_gateway || '—');
-    text('sys-info', (j.mem_free || '?') + ' MB 可用 / ' + (j.uptime || '?') + ' 秒');
+    $('ov-uptime').textContent = fmtUptime(j.uptime);
+    $('ov-mem').textContent = (j.mem_free || '?') + ' MB';
+    var total = parseInt(j.mem_total || 0, 10), free = parseInt(j.mem_free || 0, 10);
+    $('ov-membar').style.width = total ? Math.max(3, Math.round(free * 100 / total)) + '%' : '0%';
 
+    setText('ov-routes', j.ts_routes || '未发布');
     var run = j.printer_running
       ? ['运行中', 'ok']
-      : (j.printer_enabled === '1' ? ['已启用但未运行', 'warn'] : ['已停用', 'bad']);
-    text('prn-run', run[0], run[1]);
-    text('prn-dev', (j.printer_device || '—') + (j.printer_present ? '（已检测到）' : '（未检测到）'));
-    text('prn-port', 'TCP ' + (j.printer_tcp_port || '9100'));
+      : (j.printer_enabled === '1' ? ['已启用，未运行', 'warn'] : ['已停用', 'bad']);
+    setText('ov-printer', run[0], run[1]);
+    setText('ov-printer-dev', j.printer_present ? '已检测到' : '未检测到', j.printer_present ? 'ok' : 'warn');
+    setText('ov-auth', j.auth ? '已登录' : '未登录', j.auth ? 'ok' : 'warn');
+
+    // Tailscale 页
+    setText('ts-state', st[0], st[1]);
+    setText('ts-ip', j.ts_ip || '—');
+    setText('ts-host', j.hostname || '—');
+    setText('ts-routes', j.ts_routes || '未发布');
+    if (document.activeElement !== $('routes-input')) $('routes-input').value = j.ts_routes || '';
+
+    var authCard = $('ts-auth-card');
+    if (j.ts_auth_url) {
+      authCard.classList.remove('hide');
+      $('ts-auth-link').href = j.ts_auth_url;
+      $('ov-auth-banner').classList.remove('hide');
+      $('ov-auth-link').href = j.ts_auth_url;
+    } else {
+      authCard.classList.add('hide');
+      $('ov-auth-banner').classList.add('hide');
+    }
+
+    // 网络页公共字段
+    setText('net-tsip', j.ts_ip || '—');
+    setText('net-routes', j.ts_routes || '未发布');
+    setText('net-host', j.hostname || '—');
+    setText('net-proto', j.lan_proto || '—');
+    setText('net-ip', j.lan_ip || '—');
+    setText('net-gw', j.lan_gateway || '—');
+
+    // 打印页
+    setText('prn-state', run[0], run[1]);
+    setText('prn-dev', j.printer_device || '—');
+    setText('prn-present', j.printer_present ? '已检测到' : '未检测到', j.printer_present ? 'ok' : 'warn');
+    setText('prn-port', 'TCP ' + (j.printer_tcp_port || '9100'));
+    if (document.activeElement !== $('prn-device-input')) $('prn-device-input').value = j.printer_device || '';
+    if (document.activeElement !== $('prn-port-input')) $('prn-port-input').value = j.printer_port || '';
 
     var dl = $('prn-devices');
     dl.innerHTML = '';
@@ -243,51 +582,63 @@
       dl.appendChild(o);
     });
 
-    if (document.activeElement !== $('routes-input')) $('routes-input').value = j.ts_routes || '';
-    if (document.activeElement !== $('prn-device-input')) $('prn-device-input').value = j.printer_device || '';
-    if (document.activeElement !== $('prn-port-input')) $('prn-port-input').value = j.printer_port || '';
-
-    var banner = $('auth-url');
-    if (j.ts_auth_url) {
-      banner.href = j.ts_auth_url;
-      banner.classList.remove('hide');
+    var banner = $('banner');
+    if (j.default_password) {
+      banner.className = 'banner';
+      banner.innerHTML = '正在使用默认密码 <b class="mono">mt76x8</b>，请到「系统 → 安全」里修改。';
+    } else if (j.ts_auth_url) {
+      banner.className = 'banner info';
+      banner.innerHTML = 'Tailscale 正在等待授权，<a href="' + j.ts_auth_url + '" target="_blank" rel="noreferrer">打开授权页面</a>。';
     } else {
-      banner.classList.add('hide');
+      banner.className = 'banner hide';
     }
 
-    $('alert-default').classList.toggle('hide', !j.default_password);
+    state.authed = !!j.auth;
+    $('login-modal').classList.toggle('hide', state.authed);
+    document.body.classList.toggle('authed', state.authed);
+  }
 
-    document.body.classList.toggle('authed', j.auth === 1);
-    $('login-card').classList.toggle('hide', j.auth === 1);
-    Array.prototype.forEach.call(document.querySelectorAll('.auth-only'), function (el) {
-      el.classList.toggle('hide', j.auth !== 1);
-    });
+  function loadNet() {
+    if (!state.authed) return;
+    getJSON('/cgi-bin/api.sh?op=net').then(function (j) {
+      state.net = j;
+      setText('net-dns', j.dns || '—');
+      setText('net-mac', j.mac || '—');
+      $('net-ports').textContent = j.ports || '（无）';
+    }).catch(function () {});
+  }
+
+  function loadSys() {
+    if (!state.authed) return;
+    getJSON('/cgi-bin/api.sh?op=system').then(function (j) {
+      state.sys = j;
+      setText('sys-model', j.model || '—');
+      setText('sys-release', j.release || '—');
+      setText('sys-kernel', j.kernel || '—');
+      setText('sys-uptime', fmtUptime(j.uptime));
+      setText('sys-mem', (j.mem_free || '?') + ' / ' + (j.mem_total || '?') + ' MB');
+      setText('sys-load', j.load || '—');
+      setText('sys-storage', j.storage || '—');
+    }).catch(function () {});
   }
 
   function refresh() {
-    fetch('/cgi-bin/api.sh?op=status', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(render)
-      .catch(function () { $('pill').textContent = '离线'; $('pill').className = 'pill bad'; });
+    getJSON('/cgi-bin/api.sh?op=status').then(renderStatus).catch(function () {
+      setPill($('side-pill'), '离线', 'bad');
+      $('ov-state').textContent = '设备离线';
+      $('ov-state').className = 'state bad';
+    });
+    if (state.page === 'network') loadNet();
+    if (state.page === 'system') loadSys();
   }
 
-  function post(cmd, extra) {
-    var body = new URLSearchParams();
-    body.set('op', cmd);
-    if (extra) Object.keys(extra).forEach(function (k) { body.set(k, extra[k]); });
-    return fetch('/cgi-bin/api.sh', { method: 'POST', body: body })
-      .then(function (r) { return r.json(); });
-  }
-
-  function act(cmd, extra) {
-    post(cmd, extra).then(function (j) {
+  // ---------------- 动作 ----------------
+  function act(op, extra) {
+    post(op, extra).then(function (j) {
       toast(j.msg || (j.ok ? '完成' : '失败'));
-      if (cmd === 'logout') {
-        document.body.classList.remove('authed');
-        $('login-card').classList.remove('hide');
-        Array.prototype.forEach.call(document.querySelectorAll('.auth-only'), function (el) {
-          el.classList.add('hide');
-        });
+      if (op === 'logout') {
+        state.authed = false;
+        $('login-modal').classList.remove('hide');
       }
       refresh();
     }).catch(function () { toast('请求失败'); });
@@ -298,11 +649,52 @@
       .then(function (r) { return r.text(); })
       .then(function (t) {
         var pre = $('diag-output');
-        pre.textContent = t || '(空)';
+        pre.textContent = t || '（空）';
         pre.classList.remove('hide');
       })
       .catch(function () { toast('读取失败'); });
   }
+
+  document.addEventListener('click', function (ev) {
+    var el = ev.target.closest('[data-act]');
+    if (!el) return;
+    var op = el.getAttribute('data-act');
+    if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
+
+    if (op === 'login') {
+      if (state.authed) { act('ts_login'); } else { $('login-modal').classList.remove('hide'); }
+      return;
+    }
+    if (op === 'refresh') { refresh(); toast('已刷新'); return; }
+    if (op === 'show_logs') { showDiag('logs'); return; }
+    if (op === 'show_diag') { showDiag('diag'); return; }
+    if (op === 'logout') { act('logout'); return; }
+    if (op === 'ts_routes') { act(op, { cidr: $('routes-input').value.trim() }); return; }
+    if (op === 'printer_device') { act(op, { device: $('prn-device-input').value.trim() }); return; }
+    if (op === 'printer_port') { act(op, { port: $('prn-port-input').value.trim() }); return; }
+    if (op === 'set_password') {
+      var oldPw = $('old-password').value, newPw = $('new-password').value;
+      if (!oldPw || newPw.length < 6) { toast('请填写原密码，新密码至少 6 位'); return; }
+      post(op, { old: oldPw, new: newPw }).then(function (j) {
+        toast(j.msg || (j.ok ? '完成' : '失败'));
+        if (j.ok) { $('old-password').value = ''; $('new-password').value = ''; refresh(); }
+      });
+      return;
+    }
+    act(op);
+  });
+
+  $('btn-copy-ip').addEventListener('click', function () {
+    var ip = (state.data && state.data.ts_ip) || '';
+    if (!ip) { toast('还没有 Tailscale IP'); return; }
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(ip).then(function () { toast('已复制 ' + ip); });
+    } else {
+      toast(ip);
+    }
+  });
+
+  $('btn-refresh').addEventListener('click', function () { refresh(); toast('已刷新'); });
 
   $('login-btn').addEventListener('click', function () {
     var pw = $('login-password').value;
@@ -310,6 +702,7 @@
     post('login', { password: pw }).then(function (j) {
       if (j.ok) {
         $('login-password').value = '';
+        $('login-modal').classList.add('hide');
         toast('登录成功');
         refresh();
       } else {
@@ -322,32 +715,66 @@
     if (ev.key === 'Enter') $('login-btn').click();
   });
 
-  document.addEventListener('click', function (ev) {
-    var el = ev.target.closest('[data-act]');
-    if (!el) return;
-    var cmd = el.getAttribute('data-act');
-    if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
-
-    if (cmd === 'refresh') { refresh(); toast('已刷新'); return; }
-    if (cmd === 'show_logs') { showDiag('logs'); return; }
-    if (cmd === 'show_diag') { showDiag('diag'); return; }
-    if (cmd === 'logout') { act('logout'); return; }
-    if (cmd === 'ts_routes') { act(cmd, { cidr: $('routes-input').value.trim() }); return; }
-    if (cmd === 'printer_device') { act(cmd, { device: $('prn-device-input').value.trim() }); return; }
-    if (cmd === 'printer_port') { act(cmd, { port: $('prn-port-input').value.trim() }); return; }
-    if (cmd === 'set_password') {
-      var oldPw = $('old-password').value;
-      var newPw = $('new-password').value;
-      if (!oldPw || newPw.length < 6) { toast('请填写原密码，新密码至少 6 位'); return; }
-      post(cmd, { old: oldPw, new: newPw }).then(function (j) {
-        toast(j.msg || (j.ok ? '完成' : '失败'));
-        if (j.ok) { $('old-password').value = ''; $('new-password').value = ''; refresh(); }
-      });
-      return;
-    }
-    act(cmd);
+  $('login-cancel').addEventListener('click', function () {
+    $('login-modal').classList.add('hide');
   });
 
+  // ---------------- 固件升级 ----------------
+  function sha256Hex(file) {
+    if (!(window.crypto && window.crypto.subtle && file.arrayBuffer)) {
+      // HTTP 页面不是 secure context，拿不到 subtle；后端会把 sha 校验跳过。
+      return Promise.resolve('');
+    }
+    return file.arrayBuffer()
+      .then(function (buf) { return crypto.subtle.digest('SHA-256', buf); })
+      .then(function (dig) {
+        return Array.prototype.map.call(new Uint8Array(dig), function (b) {
+          return ('0' + b.toString(16)).slice(-2);
+        }).join('');
+      })
+      .catch(function () { return ''; });
+  }
+
+  function startUpgrade() {
+    var f = $('fw-file').files[0];
+    if (!f) { toast('请选择 sysupgrade.bin'); return; }
+    if (f.size > 15728640) { toast('文件超过 15 MiB'); return; }
+    if (!confirm('确定升级？\n\n期间不能断电，设备会自动重启。')) return;
+
+    var btn = $('btn-upgrade');
+    btn.disabled = true;
+    $('fw-progress').style.width = '0%';
+    $('fw-state').textContent = '计算校验值…';
+
+    sha256Hex(f).then(function (sum) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/cgi-bin/upgrade.sh' + (sum ? '?sha256=' + sum : ''));
+      xhr.upload.onprogress = function (e) {
+        if (!e.lengthComputable) return;
+        var p = Math.round(e.loaded * 100 / e.total);
+        $('fw-progress').style.width = p + '%';
+        $('fw-state').textContent = '上传中 ' + p + '%';
+      };
+      xhr.onload = function () {
+        var j = null;
+        try { j = JSON.parse(xhr.responseText); } catch (e) { j = null; }
+        if (j) {
+          toast(j.msg || (j.ok ? '完成' : '失败'));
+          if (j.ok) { $('fw-state').textContent = '升级中，设备即将重启…'; return; }
+        } else {
+          toast('响应异常');
+        }
+        btn.disabled = false;
+      };
+      xhr.onerror = function () { toast('上传失败'); btn.disabled = false; };
+      xhr.send(f);
+    });
+  }
+
+  $('btn-upgrade').addEventListener('click', startUpgrade);
+
+  // ---------------- 启动 ----------------
+  go((location.hash || '#/overview').replace('#/', ''));
   refresh();
   setInterval(refresh, 10000);
 })();

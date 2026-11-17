@@ -329,6 +329,8 @@ jobs:
             www/index.html \
             www/cgi-bin/ts-login.sh \
             www/cgi-bin/api.sh \
+            www/cgi-bin/upgrade.sh \
+            usr/lib/tsui.sh \
             etc/uci-defaults/96-web-auth \
             etc/uci-defaults/97-root-password \
             etc/uci-defaults/98-lan-ip \
@@ -344,6 +346,7 @@ jobs:
           for f in \
             www/cgi-bin/ts-login.sh \
             www/cgi-bin/api.sh \
+            www/cgi-bin/upgrade.sh \
             etc/uci-defaults/96-web-auth \
             etc/uci-defaults/97-root-password \
             etc/uci-defaults/98-lan-ip \

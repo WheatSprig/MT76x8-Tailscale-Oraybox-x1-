@@ -9,11 +9,14 @@
 
 | 路径 | 作用 |
 | --- | --- |
-| `/`、`/index.html` | 控制台页面 |
+| `/`、`/index.html` | 控制台页面（概览 / 网络 / Tailscale / 打印 / 系统） |
 | `/cgi-bin/api.sh?op=status` | 状态 JSON（只读，不需要登录） |
+| `/cgi-bin/api.sh?op=net` | 网络详情：DNS、MAC、监听端口（需要登录） |
+| `/cgi-bin/api.sh?op=system` | 型号、固件、内核、负载、存储（需要登录） |
 | `/cgi-bin/api.sh?op=logs` | 系统日志（需要登录） |
 | `/cgi-bin/api.sh?op=diag` | 完整诊断：内存 / 进程 / 路由 / tailscale（需要登录） |
 | `POST /cgi-bin/api.sh` | 所有写操作，`op=` 指定动作 |
+| `POST /cgi-bin/upgrade.sh` | 上传 sysupgrade 镜像并升级（需要登录，见下） |
 | `/cgi-bin/ts-login.sh` | 兼容入口：有授权链接就 302，没有就触发一次登录再跳回控制台 |
 
 **登录**：用户名固定 `root`，密码与 SSH 相同。首次开机默认密码
@@ -59,3 +62,27 @@ CGI 只读文件，后台循环不碰 tailscale，所以无论 daemon 是否正�
 > 另外 `tailscale` 需要 `/dev/net/tun`。`/etc/init.d/tailscale` 现在会先
 > `modprobe tun` 并在缺失时手动 `mknod`，避免内核模块没加载导致 tailscaled
 > 卡在启动阶段。
+
+### 固件升级入口（防刷死）
+
+「系统 → 固件升级」直接上传 `*sysupgrade.bin`，后端是
+`/cgi-bin/upgrade.sh`。它比手动 SSH 多了几道闸门：
+
+| 闸门 | 拒绝的情况 |
+| --- | --- |
+| 登录态 | 未登录直接 401 |
+| 来源地址 | 来自 `100.*`（Tailscale）的上传会被拒绝 —— 升级前要停掉 tailscaled 腾内存，走隧道会把自己断在半路 |
+| 大小 | < 4 MiB 或 > 15,728,640 字节 |
+| 格式 | 前 4 字节不是 uImage 魔数 `27051956` |
+| 设备 | 镜像里没有 `oraybox,x1` 元数据（不是这块板子的固件） |
+| 校验 | 浏览器算了 sha256 时，与设备重新计算的结果比对 |
+| 并发 | 已有升级任务时拒绝 |
+| 内存 | 停掉 tailscaled 后可用内存仍 < 24 MB |
+
+通过后镜像写到 `/tmp/fw.bin`（tmpfs），`sysupgrade -q` 负责真正的写入。
+**sysupgrade 只写 firmware 分区（mtd3）**，u-boot / Breed 在 `0x0~0x30000`，
+不会被碰 —— 写坏了断电按住 Reset 还能进 Breed 重刷。
+
+唯一防不住的是**写入过程中断电**。所以升级前确认供电稳定，不要用会掉电的
+插排；升级期间控制台会显示「升级中，设备即将重启」，约 2~3 分钟。
+升级默认保留配置，Tailscale 登录态和 `/etc/tsui.passwd` 都在 keep.d 里。
