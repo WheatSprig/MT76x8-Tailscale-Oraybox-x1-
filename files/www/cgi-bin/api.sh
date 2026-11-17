@@ -421,6 +421,109 @@ EOF
     exit 0
 fi
 
+if [ "$OP" = "wifi" ]; then
+    auth_ok || fail "请先登录"
+    RADIO_DIS=$(uci -q get wireless.radio0.disabled)
+    IF_MODE=$(uci -q get wireless.default_radio0.mode)
+    CFG_SSID=$(uci -q get wireless.default_radio0.ssid)
+    HAS_KEY=0
+    [ -n "$(uci -q get wireless.default_radio0.key 2>/dev/null)" ] && HAS_KEY=1
+
+    WDEV=$(ubus call network.interface.wwan status 2>/dev/null \
+        | tr -d ' \t\n' | sed -n 's/.*"l3_device":"\([^"]*\)".*/\1/p')
+    [ -n "$WDEV" ] || WDEV=phy0-sta0
+
+    SSID_NOW=""
+    SIGNAL=""
+    if [ "$RADIO_DIS" != "1" ]; then
+        _info=$(iwinfo "$WDEV" info 2>/dev/null)
+        SSID_NOW=$(printf '%s' "$_info" | sed -n 's/.*ESSID:[[:space:]]*"\(.*\)".*/\1/p' | head -n 1)
+        SIGNAL=$(printf '%s' "$_info" | sed -n 's/^[[:space:]]*Signal:[[:space:]]*\(.*\)$/\1/p' | head -n 1)
+        [ -n "$SIGNAL" ] || SIGNAL=$(printf '%s' "$_info" | sed -n 's/.*Signal:[[:space:]]*\([-0-9]* dBm\).*/\1/p' | head -n 1)
+    fi
+    WIP=$(ip -4 addr show dev "$WDEV" 2>/dev/null \
+        | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
+
+    MODE=off
+    if [ "$RADIO_DIS" != "1" ]; then
+        case "${IF_MODE:-ap}" in
+            sta) MODE=client ;;
+            *) MODE=${IF_MODE:-ap} ;;
+        esac
+    fi
+
+    EXIT_DEV=$(ip route show default 2>/dev/null \
+        | sed -n 's/^default via [0-9.]* dev \([^ ]*\).*/\1/p' | head -n 1)
+
+    json_header
+    printf '\r\n'
+    cat <<EOF
+{
+  "ok": true,
+  "mode": "$(json_escape "$MODE")",
+  "cfg_ssid": "$(json_escape "$CFG_SSID")",
+  "has_key": $HAS_KEY,
+  "connected": $([ -n "$SSID_NOW" ] && echo 1 || echo 0),
+  "ssid": "$(json_escape "$SSID_NOW")",
+  "signal": "$(json_escape "$SIGNAL")",
+  "ip": "$(json_escape "$WIP")",
+  "iface": "$(json_escape "$WDEV")",
+  "exit_dev": "$(json_escape "$EXIT_DEV")"
+}
+EOF
+    exit 0
+fi
+
+if [ "$OP" = "wifi_scan" ]; then
+    auth_ok || fail "请先登录"
+    WAS_OFF=0
+    [ "$(uci -q get wireless.radio0.disabled)" = "1" ] && WAS_OFF=1
+
+    # 扫描需要 radio 起来；原来关着的话，扫完再关回去
+    if [ "$WAS_OFF" = "1" ]; then
+        /etc/init.d/wpad start >/dev/null 2>&1
+        wifi up >/dev/null 2>&1
+        sleep 6
+    fi
+
+    WDEV=$(ubus call network.interface.wwan status 2>/dev/null \
+        | tr -d ' \t\n' | sed -n 's/.*"l3_device":"\([^"]*\)".*/\1/p')
+    [ -n "$WDEV" ] || WDEV=phy0-sta0
+
+    OUT=$(iwinfo "$WDEV" scan 2>/dev/null)
+    [ -n "$OUT" ] || OUT=$(iw dev "$WDEV" scan 2>/dev/null)
+
+    if [ "$WAS_OFF" = "1" ]; then
+        wifi down >/dev/null 2>&1
+    fi
+
+    [ -n "$OUT" ] || fail "扫描失败（无线可能没起来），可以手动填 SSID"
+
+    JSON_ITEMS=$(printf '%s\n' "$OUT" | awk '
+        function esc(x) { gsub(/\\/, " ", x); gsub(/"/, " ", x); return x }
+        /ESSID:/ {
+            if ($0 ~ /ESSID: "/) {
+                s=$0; sub(/.*ESSID: "/, "", s); sub(/".*/, "", s)
+            } else {
+                s=""
+            }
+        }
+        /Signal:/ { g=$0; sub(/.*Signal:[ ]*/, "", g); sub(/[ ].*/, "", g) }
+        /Encryption:/ {
+            e=$0; sub(/.*Encryption:[ ]*/, "", e); sub(/[ ].*/, "", e)
+            if (s != "" && !seen[s]++) {
+                printf "%s{\"ssid\":\"%s\",\"signal\":\"%s\",\"enc\":\"%s\"}", (n++?",":""), esc(s), esc(g), esc(e)
+            }
+            s=""
+        }
+    ')
+
+    json_header
+    printf '\r\n'
+    printf '{"ok":true,"networks":[%s]}\n' "$JSON_ITEMS"
+    exit 0
+fi
+
 if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
     auth_ok || fail "请先登录"
     text_header
@@ -795,6 +898,59 @@ case "$OP" in
                 fail "action 只能是 on 或 off"
                 ;;
         esac
+        ;;
+
+    wifi_apply)
+        MODE=$(param mode)
+        case "$MODE" in
+            client|off) ;;
+            *) fail "模式只能是 client 或 off" ;;
+        esac
+
+        if [ "$MODE" = "off" ]; then
+            uci -q set wireless.radio0.disabled='1'
+            uci -q commit wireless
+            ( wifi down >/tmp/wifi-apply.log 2>&1 ) &
+            ok "无线已关闭（有线不受影响）"
+        fi
+
+        SSID=$(param ssid)
+        KEY=$(param key)
+        [ -n "$SSID" ] || fail "请填写 SSID"
+        [ ${#SSID} -le 32 ] || fail "SSID 最多 32 个字符"
+        if [ ${#KEY} -gt 0 ]; then
+            [ ${#KEY} -ge 8 ] || fail "WPA 密码至少 8 位"
+            [ ${#KEY} -le 63 ] || fail "WPA 密码最多 63 位"
+        fi
+
+        uci -q set wireless.radio0.disabled='0'
+        uci -q set wireless.default_radio0.mode='sta'
+        uci -q set wireless.default_radio0.ssid="$SSID"
+        uci -q set wireless.default_radio0.network='wwan'
+        if [ -n "$KEY" ]; then
+            uci -q set wireless.default_radio0.encryption='psk2'
+            uci -q set wireless.default_radio0.key="$KEY"
+        else
+            uci -q set wireless.default_radio0.encryption='none'
+            uci -q delete wireless.default_radio0.key
+        fi
+        uci -q commit wireless
+
+        # 独立接口，不桥进 br-lan（STA 不允许桥接）
+        uci -q set network.wwan=interface
+        uci -q set network.wwan.proto='dhcp'
+        uci -q set network.wwan.metric='20'
+        uci -q commit network
+
+        /etc/init.d/wpad enable >/dev/null 2>&1
+        /etc/init.d/wpad start >/dev/null 2>&1
+        /etc/init.d/net-failover enable >/dev/null 2>&1
+        /etc/init.d/net-failover start >/dev/null 2>&1
+
+        # wifi reload 有时不会把停着的 radio 拉起来，补一次 wifi up
+        ( wifi reload >/tmp/wifi-apply.log 2>&1; sleep 1; wifi up >>/tmp/wifi-apply.log 2>&1 ) &
+
+        ok "已保存，正在连接 $SSID（约 10~30 秒，不影响有线）"
         ;;
 
     printer_toggle)
