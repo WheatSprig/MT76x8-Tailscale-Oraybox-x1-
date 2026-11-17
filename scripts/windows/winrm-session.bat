@@ -1,17 +1,20 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
+cd /d "%~dp0"
 
 rem ============================================================
-rem  ä¸´æ—¶å¼€å¯ WinRMï¼ˆPowerShell Remotingï¼‰
-rem  - è¿è¡Œï¼šå¯åŠ¨ WinRMï¼Œåªæ”¾è¡Œ Tailscale ç½‘æ®µä¸Žæœ¬åœ°å­ç½‘
-rem  - ç»“æŸæ—¶ï¼šæŒ‰ä»»æ„é”®åœæ­¢ WinRMï¼Œå¹¶æ¢å¤ä¸ºâ€œæ‰‹åŠ¨å¯åŠ¨â€
-rem  - å·²åœ¨è¿è¡Œæ—¶å†æ¬¡è¿è¡Œï¼šç›´æŽ¥èµ°åœæ­¢æµç¨‹
+rem  ÁÙÊ±¿ªÆô WinRM£¨PowerShell Ô¶³Ì¹ÜÀí£©
+rem  ÔËÐÐ£ºÆô¶¯ WinRM£¬Ö»·ÅÐÐ Tailscale Íø¶ÎÓë±¾µØ×ÓÍø
+rem  ½áÊø£º°´ÈÎÒâ¼üÍ£Ö¹£¬²¢»Ö¸´Îª¡°ÊÖ¶¯Æô¶¯¡±
+rem  ÒÑÔÚÔËÐÐÊ±ÔÙ´ÎÔËÐÐ£ºÖ±½Ó×ßÍ£Ö¹Á÷³Ì
+rem
+rem  ×¢Òâ£º±¾ÎÄ¼þÓÃ GBK ±àÂë±£´æ¡£cmd °´ÏµÍ³´úÂëÒ³£¨936£©½âÎöÅú´¦Àí£¬
+rem  UTF-8£¨´ø²»´ø BOM£©ÀïµÄÖÐÎÄ»áÈÃÃüÁî±»²ð»µ£¬BOM »¹»á±»µ±³ÉµÚÒ»ÐÐ¡£
 rem ============================================================
 
 net session >nul 2>&1
 if errorlevel 1 (
-    echo éœ€è¦ç®¡ç†å‘˜æƒé™ï¼Œæ­£åœ¨ææƒ...
+    echo ÐèÒª¹ÜÀíÔ±È¨ÏÞ£¬ÕýÔÚÌáÈ¨...
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b
 )
@@ -19,10 +22,10 @@ if errorlevel 1 (
 sc query WinRM | find /i "RUNNING" >nul
 if not errorlevel 1 goto stop
 
-echo == å¯åŠ¨ WinRMï¼ˆä»… Tailscale ä¸Žæœ¬åœ°å­ç½‘å¯è®¿é—®ï¼‰
+echo == Æô¶¯ WinRM£¨½ö Tailscale Óë±¾µØ×ÓÍø¿É·ÃÎÊ£©
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null"
 if errorlevel 1 (
-    echo    Enable-PSRemoting å¤±è´¥ï¼Œè¯·æ£€æŸ¥ç³»ç»Ÿç­–ç•¥æˆ–å®‰å…¨è½¯ä»¶
+    echo    Enable-PSRemoting Ê§°Ü£¬Çë¼ì²éÏµÍ³²ßÂÔ»ò°²È«Èí¼þ
     pause
     exit /b 1
 )
@@ -30,36 +33,29 @@ if errorlevel 1 (
 sc config WinRM start= demand >nul 2>&1
 net start WinRM >nul 2>&1
 
-rem æŠŠ Tailscale ç½‘å¡è®¾ä¸ºâ€œä¸“ç”¨ç½‘ç»œâ€ï¼Œè®©ç³»ç»Ÿè‡ªå¸¦è§„åˆ™ä¹Ÿèƒ½ç”Ÿæ•ˆ
 powershell -NoProfile -Command "$p=Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceAlias -eq 'Tailscale' }; if ($p) { $p | Set-NetConnectionProfile -NetworkCategory Private }" >nul 2>&1
 
-rem è‡ªå»ºä¸€æ¡è¯­è¨€æ— å…³çš„è§„åˆ™ï¼Œé™å®šæ¥æºç½‘æ®µ
 netsh advfirewall firewall delete rule name="WinRM-Tailscale" >nul 2>&1
 netsh advfirewall firewall add rule name="WinRM-Tailscale" dir=in action=allow protocol=TCP localport=5985,5986 remoteip=100.64.0.0/10,localsubnet >nul
 if errorlevel 1 (
-    echo    é˜²ç«å¢™è§„åˆ™åˆ›å»ºå¤±è´¥
+    echo    ·À»ðÇ½¹æÔò´´½¨Ê§°Ü
 ) else (
-    echo    é˜²ç«å¢™ï¼šä»… 100.64.0.0/10 ä¸Žæœ¬åœ°å­ç½‘å¯è®¿é—® 5985/5986
+    echo    ·À»ðÇ½£º½ö 100.64.0.0/10 Óë±¾µØ×ÓÍø¿É·ÃÎÊ 5985/5986
 )
 
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "$ip=(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '100.*' } | Select-Object -First 1).IPAddress; if ($ip) { $ip }"`) do set "TSIP=%%i"
-if defined TSIP (
-    echo    è¿žæŽ¥ï¼šEnter-PSSession -ComputerName %TSIP% -Credential ^(Get-Credential^)
-) else (
-    echo    æœªæ‰¾åˆ° Tailscale åœ°å€ï¼Œè¯·å…ˆå¯åŠ¨ Tailscale
-)
+powershell -NoProfile -Command "$ip=(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -like '100.*' } | Select-Object -First 1).IPAddress; if ($ip) { Write-Host ('   Á¬½Ó£ºEnter-PSSession -ComputerName ' + $ip + ' -Credential (Get-Credential)') } else { Write-Host '   Î´ÕÒµ½ Tailscale µØÖ·£¬ÇëÏÈÆô¶¯ Tailscale' }"
 
 echo.
-echo ä¿æŒæ­¤çª—å£æ‰“å¼€ã€‚æŒ‰ä»»æ„é”®åœæ­¢ WinRMã€‚
-echo ï¼ˆç›´æŽ¥ç‚¹çª—å£å³ä¸Šè§’å…³é—­å¯èƒ½æ¥ä¸åŠæ¸…ç†ï¼›å†è¿è¡Œä¸€æ¬¡æœ¬è„šæœ¬ä¼šå…ˆåœæŽ‰å®ƒï¼‰
+echo ±£³Ö´Ë´°¿Ú´ò¿ª¡£°´ÈÎÒâ¼üÍ£Ö¹ WinRM¡£
+echo Ö±½ÓµãÓÒÉÏ½Ç¹Ø±Õ¿ÉÄÜÀ´²»¼°ÇåÀí£»ÔÙÔËÐÐÒ»´Î±¾½Å±¾»áÏÈÍ£µôËü¡£
 echo.
 pause >nul
 
 :stop
-echo == åœæ­¢ WinRM
+echo == Í£Ö¹ WinRM
 net stop WinRM >nul 2>&1
 sc config WinRM start= demand >nul 2>&1
 netsh advfirewall firewall delete rule name="WinRM-Tailscale" >nul 2>&1
-echo    å·²åœæ­¢ï¼Œå¼€æœºä¸ä¼šè‡ªå¯
+echo    ÒÑÍ£Ö¹£¬¿ª»ú²»»á×ÔÆô
 timeout /t 2 >nul
 exit /b 0

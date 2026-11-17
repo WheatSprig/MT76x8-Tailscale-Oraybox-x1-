@@ -33,6 +33,28 @@ Invoke-Command -ComputerName 100.70.0.11 -Credential (Get-Credential) `
   再运行一次脚本即可停掉；
 - 不要把 5985/5986 映射到公网，只走 Tailscale 或局域网。
 
+### 为什么 `.bat` 用 GBK 而不是 UTF-8 + BOM
+
+`.ps1` 适合 UTF-8（带 BOM），但 `.bat` 相反：**cmd.exe 按系统代码页解析批处理
+文件**，中文 Windows 是 936（GBK）。
+
+- UTF-8 带 BOM：BOM 的三个字节会被当成第一行的一部分，出现
+  `'锘緻echo off' 不是内部或外部命令`；
+- UTF-8 不带 BOM：中文被按 GBK 解码，命令会被拆成乱码片段；
+- 文件内写 `chcp 65001` 也救不了：解析器已经按旧代码页读过前面的行了。
+
+实测（本机 ACP/OEMCP 均为 936）：
+
+```text
+UTF-8 no BOM + chcp 65001 -> 首行乱码、部分命令被拆断
+UTF-8 with BOM            -> '锘緻echo off' 不是内部或外部命令
+GBK + CRLF                -> 中文与命令全部正常
+```
+
+所以这个 `.bat` 保存为 **GBK + CRLF、无 BOM**。用编辑器改它时记得选
+「ANSI / GB18030」而不是 UTF-8。仓库里 `.gitattributes` 把 `*.bat` 钉成
+CRLF，避免检出后换行符被改坏。
+
 ## 更喜欢 shell？
 
 WinRM 适合跑 PowerShell 脚本；如果只是想要一个命令行，装 OpenSSH Server
