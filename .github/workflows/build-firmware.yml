@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       profile:
-        description: '设备 PROFILE 名称（如 oraybox_x1；输入 list 仅列出所有 mt76x8 profile）'
+        description: '设备 PROFILE 名称（本设备用 oraybox_x1；输入 list 仅列出所有 mt76x8 profile）'
         required: true
-        default: 'widora_neo-16m'
+        default: 'oraybox_x1'
         type: string
 
 permissions:
@@ -166,10 +166,16 @@ jobs:
             exit 0
           fi
 
-          # 保留 uhttpd 作为 80 端口本地 Web 服务，供 tailscale serve 反向代理；
-          # 移除 LuCI 后仍保留 BusyBox httpd（8080）与 uhttpd（80）两套静态页面访问入口。
+          # 保留 uhttpd 作为 80 端口本地 Web 服务，供 tailscale serve 反向代理。
+          #
+          # 关于 -luci：默认包里还有 luci-app-opkg / luci-compat / luci-lib-ipkg，
+          # 以及 default-settings（它直接依赖 luci）、default-settings-chn、
+          # ipv6helper（依赖 odhcp6c/odhcpd-ipv6only）。只写 -luci 时 opkg 会把这些
+          # 依赖重新拉回来，LuCI 实际仍留在固件里，因此必须逐个 negate。
           PACKAGES="ca-bundle kmod-tun iptables-nft uhttpd \
             -luci -luci-ssl -luci-app-firewall \
+            -luci-app-opkg -luci-compat -luci-lib-base -luci-lib-ipkg \
+            -default-settings -default-settings-chn -ipv6helper \
             -odhcpd-ipv6only -ppp -ppp-mod-pppoe -ip6tables -odhcp6c"
 
           echo "Building profile: $PROFILE"
@@ -214,8 +220,10 @@ jobs:
           if [ -n "$MANIFEST" ]; then
             echo "Manifest: $MANIFEST"
             if grep -q '^luci-base ' "$MANIFEST"; then
-              echo "::warning::-luci 未生效，luci-base 被依赖回填，固件会明显变大"
+              echo "::error::LuCI 仍在固件中（luci-base 被依赖回填），请检查 PACKAGES 的 negate 列表"
+              exit 1
             fi
+            echo "LuCI 已彻底移除"
           fi
 
           {

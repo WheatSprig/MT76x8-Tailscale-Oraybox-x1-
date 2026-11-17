@@ -37,8 +37,7 @@
    | 查询所有可用 mt76x8 profile | `list` |
    | 其他 MT76x8 设备 | 对应 profile 名 |
 
-   > 输入框默认值是通用占位值 `widora_neo-16m`。**本设备请务必改成
-   > `oraybox_x1`**，否则会生成给 Widora Neo 的固件。
+   > 输入框默认值已经是 `oraybox_x1`，直接运行即可。
    >
    > 不确定型号时先运行一次 `list`，在 job 的 Summary 或日志中查看
    > `Available Profiles` 列表。
@@ -53,35 +52,39 @@ LuCI/PPPoE/IPv6 相关包，并加入：
 ```text
 ca-bundle kmod-tun iptables-nft uhttpd
 -luci -luci-ssl -luci-app-firewall
+-luci-app-opkg -luci-compat -luci-lib-base -luci-lib-ipkg
+-default-settings -default-settings-chn -ipv6helper
 -odhcpd-ipv6only -ppp -ppp-mod-pppoe -ip6tables -odhcp6c
 ```
 
 保留 `uhttpd` 是为了让 `tailscale serve --bg http://127.0.0.1:80` 在本机 80
 端口有可代理的页面；BusyBox httpd 继续在 8080 端口提供同一份 `/www` 页面。
 
+> **为什么 negate 列表这么长**：只写 `-luci` 并不能移除 LuCI。默认包列表里
+> `default-settings` 直接依赖 `luci`，`default-settings-chn` 依赖
+> `luci-i18n-base-zh-cn`，`luci-app-opkg`/`luci-compat`/`luci-lib-ipkg` 依赖
+> `luci-base`，`ipv6helper` 依赖 `odhcp6c`/`odhcpd-ipv6only`。opkg 会把它们
+> 作为依赖重新装回来，所以必须把这些「入口包」也一起去掉。
+> 去掉 `default-settings` 后主机名/时区会退回默认值，已由
+> `99-tailscale-setup` 补回 `mt76x8` / `CST-8`。
+
 ## 已实测的构建结果
 
-用 `profile=oraybox_x1` 跑通的一次真实构建：
+用 `profile=oraybox_x1` 跑通的一次真实构建（仍含 LuCI 的旧版本，仅用于对比）：
 
 | 项目 | 数值 |
 | --- | --- |
 | tailscaled（mipsle softfloat，静态链接） | 21 MiB（`-s -w`，未 UPX） |
-| `*squashfs-sysupgrade.bin` | **13,566,749 字节**（12.94 MiB） |
+| `*squashfs-sysupgrade.bin`（含 LuCI） | 13,566,749 字节（12.94 MiB） |
 | 15 MiB 分区余量 | 约 2.06 MiB |
-| sha256 | `526cfeeaf9cfb7da441a721dc8cfed676110d203a92a04f00404d99f39cffc80` |
+
+彻底裁掉 LuCI 后体积会再降约 2 MB，余量更充足。
 
 工作流在打包后还会校验 `build_dir/*/root-ramips` 里的
 `www/index.html`、`www/cgi-bin/ts-login.sh`、`etc/uci-defaults/99-tailscale-setup`、
 `usr/sbin/tailscaled` 是否存在、脚本是否有执行权限、`tailscale` 软链接是否就位，
-避免 FILES 覆盖层静默失效。
-
-> **关于 `-luci`**：ImageBuilder 的默认包列表里还带有
-> `luci-i18n-base-zh-cn`、`luci-mod-*`、`luci-theme-bootstrap` 等包，它们依赖
-> `luci-base`，opkg 会把 `luci-base` 重新拉回来，所以单独写 `-luci` 并不能真正
-> 移除 LuCI。实测固件里 LuCI 仍然存在，但 13.57 MB 依然能塞进 15 MiB。
-> 工作流会在 `.manifest` 里检测到这种情况并输出 `::warning::`。
-> 想彻底裁掉 LuCI 需要把默认列表里的所有 `luci*` 包逐个 negate，
-> 省下约 2 MB，代价是失去网页管理界面（只能 SSH + UCI 改配置）。
+避免 FILES 覆盖层静默失效；同时检查 `.manifest`，一旦 `luci-base` 被回填就直接
+构建失败。
 
 ## 默认访问地址
 

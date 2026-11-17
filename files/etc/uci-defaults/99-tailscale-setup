@@ -2,6 +2,14 @@
 # 首次开机初始化：关闭 LED、启用 Tailscale、启动网页与 Tailnet 反向代理守护。
 # 该脚本位于 /etc/uci-defaults/，首次启动执行成功后会被自动删除。
 
+# ---------- 0. 基础系统标识 ----------
+# 固件剔除了 default-settings（它依赖 luci），这里补回主机名与时区。
+if [ -f /etc/config/system ]; then
+    uci -q set system.@system[0].hostname='mt76x8'
+    uci -q set system.@system[0].timezone='CST-8'
+    uci -q set system.@system[0].zonename='Asia/Shanghai'
+fi
+
 # ---------- 1. 所有 LED 保持熄灭 ----------
 for led in /sys/class/leds/*; do
     [ -e "$led" ] || continue
