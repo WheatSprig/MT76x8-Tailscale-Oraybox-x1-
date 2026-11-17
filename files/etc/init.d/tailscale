@@ -5,11 +5,21 @@ START=95
 STOP=10
 
 start_service() {
-    mkdir -p /etc/tailscale /var/run/tailscale
+    mkdir -p /etc/tailscale /var/run/tailscale /dev/net
     chmod 700 /etc/tailscale
 
+    # kmod-tun 装了不等于已加载，/dev/net/tun 也不会自己出现；
+    # tailscaled 没有它就无法建接口，会一直卡在启动阶段。
+    modprobe tun 2>/dev/null
+    if [ ! -c /dev/net/tun ]; then
+        mknod /dev/net/tun c 10 200 2>/dev/null
+        chmod 600 /dev/net/tun 2>/dev/null
+    fi
+
     procd_open_instance
-    procd_set_param env GOGC=10 GOMEMLIMIT=32MiB
+    # 64MB 内存下，GOGC 太低会让 Go 运行时一直 GC，580MHz 单核会被拖死。
+    # 用默认 GOGC + 软上限，让 tailscaled 在内存吃紧时再回收。
+    procd_set_param env GOGC=100 GOMEMLIMIT=36MiB
     procd_set_param command /usr/sbin/tailscaled \
         --state=/etc/tailscale/tailscaled.state \
         --socket=/var/run/tailscale/tailscaled.sock \

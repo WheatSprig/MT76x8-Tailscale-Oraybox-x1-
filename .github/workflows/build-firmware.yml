@@ -191,6 +191,22 @@ jobs:
           chmod +x files/etc/uci-defaults/98-lan-ip
           grep -E "^LAN_(MODE|IP|GATEWAY)=" files/etc/uci-defaults/98-lan-ip
 
+      # 用仓库 secret 指定 root 密码哈希；不设置的话固件里是默认密码 mt76x8。
+      - name: Bake root password hash
+        if: inputs.profile != 'list'
+        env:
+          ROOT_PASSWORD_HASH: ${{ secrets.ROOT_PASSWORD_HASH }}
+        run: |
+          set -euo pipefail
+          chmod +x files/etc/uci-defaults/96-web-auth files/etc/uci-defaults/97-root-password
+          if [ -n "$ROOT_PASSWORD_HASH" ]; then
+            sed -i "s|^ROOT_HASH=.*|ROOT_HASH='$ROOT_PASSWORD_HASH'|" \
+              files/etc/uci-defaults/97-root-password
+            echo "已使用仓库 secret ROOT_PASSWORD_HASH"
+          else
+            echo "::notice::未设置 secret ROOT_PASSWORD_HASH，使用默认密码 mt76x8"
+          fi
+
       - name: Download ImageBuilder then list profiles or build image
         env:
           PROFILE: ${{ inputs.profile }}
@@ -267,11 +283,13 @@ jobs:
           for f in \
             www/index.html \
             www/cgi-bin/ts-login.sh \
-            www/cgi-bin/status.sh \
-            www/cgi-bin/action.sh \
+            www/cgi-bin/api.sh \
+            etc/uci-defaults/96-web-auth \
+            etc/uci-defaults/97-root-password \
             etc/uci-defaults/98-lan-ip \
             etc/uci-defaults/99-tailscale-setup \
             etc/init.d/tailscale \
+            lib/upgrade/keep.d/mt76x8 \
             usr/sbin/tailscaled; do
             if [ ! -e "$ROOTFS/$f" ]; then
               echo "::error::FILES 覆盖层未生效，rootfs 缺少 $f"
@@ -280,8 +298,9 @@ jobs:
           done
           for f in \
             www/cgi-bin/ts-login.sh \
-            www/cgi-bin/status.sh \
-            www/cgi-bin/action.sh \
+            www/cgi-bin/api.sh \
+            etc/uci-defaults/96-web-auth \
+            etc/uci-defaults/97-root-password \
             etc/uci-defaults/98-lan-ip \
             etc/uci-defaults/99-tailscale-setup; do
             if [ ! -x "$ROOTFS/$f" ]; then

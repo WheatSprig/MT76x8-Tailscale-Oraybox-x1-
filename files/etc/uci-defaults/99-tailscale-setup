@@ -104,15 +104,34 @@ if [ -f /etc/config/uhttpd ]; then
     uci -q set uhttpd.main.cgi_prefix='/cgi-bin'
     # 不列目录（uhttpd 默认就按 index.html 作为首页）。
     uci -q set uhttpd.main.no_dirlists='1'
+    # 慢请求（旧版 CGI 曾把 tailscale CLI 卡住）不允许多占槽位。
+    uci -q set uhttpd.main.max_requests='8'
+    uci -q set uhttpd.main.script_timeout='20'
     uci -q commit uhttpd
     /etc/init.d/uhttpd enable
     /etc/init.d/uhttpd restart >/dev/null 2>&1
 fi
 
-# ---------- 6. 开机守护：刷新网段 + Tailscale Serve ----------
+# ---------- 6. 开机守护：状态缓存 + 网段 + Tailscale Serve ----------
+# 关键点：CGI 不直接调用 tailscale CLI，只读 /tmp/ts.status。
+# 64MB 内存里每次执行 22MB 的 CLI 都很贵，十几个请求就足以把设备拖死。
 cat >/etc/rc.local <<'RCLOCAL'
 #!/bin/sh
 # 由 /etc/uci-defaults/99-tailscale-setup 生成。
+
+# 设备没有 timeout 工具，用看门狗限制单条命令的存活时间。
+run_limited() {
+    _secs=$1
+    shift
+    "$@" &
+    _p=$!
+    ( sleep "$_secs"; kill -9 "$_p" 2>/dev/null ) &
+    _w=$!
+    wait "$_p" 2>/dev/null
+    _rc=$?
+    kill "$_w" 2>/dev/null
+    return $_rc
+}
 
 # 从 br-lan 当前地址算出要发布的网段。DHCP 的地址可能变，所以每次都要重算。
 lan_cidr() {
@@ -124,33 +143,70 @@ lan_cidr() {
     [ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
 }
 
+# 把 tailscale 状态落到 /tmp/ts.status（state / ip / auth / updated）。
+ts_collect() {
+    rm -f /tmp/ts.json
+    run_limited 8 tailscale status --json >/tmp/ts.json 2>/dev/null
+
+    _state=""
+    _ip=""
+    _auth=""
+    if [ -s /tmp/ts.json ]; then
+        _state=$(grep -o '"BackendState"[[:space:]]*:[[:space:]]*"[^"]*"' /tmp/ts.json \
+            | head -n 1 | cut -d '"' -f 4)
+        _auth=$(grep -o '"AuthURL"[[:space:]]*:[[:space:]]*"[^"]*"' /tmp/ts.json \
+            | head -n 1 | cut -d '"' -f 4)
+        _ips=$(grep -o '"TailscaleIPs"[[:space:]]*:[[:space:]]*\[[^]]*\]' /tmp/ts.json | head -n 1)
+        _ip=$(printf '%s' "$_ips" | grep -o '"[0-9][0-9.]*"' | head -n 1 | tr -d '"')
+    fi
+
+    _tmp=/tmp/ts.status.$$
+    {
+        echo "state=$_state"
+        echo "ip=$_ip"
+        echo "auth=$_auth"
+        echo "updated=$(date +%s)"
+    } >"$_tmp"
+    chmod 644 "$_tmp"
+    mv "$_tmp" /tmp/ts.status
+}
+
 mkdir -p /etc/tailscale
 
 (
     SERVED=0
     LAST_CIDR=""
+    APPLIED=""
 
     while true; do
-        # 1) 网段变了就更新文件并重新发布（未登录时 set 会失败，下一轮重试）。
+        # 1) 网段变了就刷新记录文件（DHCP 续租换了地址也能跟上）。
         CUR=$(lan_cidr)
         if [ -n "$CUR" ] && [ "$CUR" != "$LAST_CIDR" ]; then
             LAST_CIDR="$CUR"
             echo "$CUR" > /etc/tailscale/lan-cidr
-            tailscale set --advertise-routes="$CUR" >/dev/null 2>&1
         fi
 
-        # 2) 登录成功后把本地 80 端口暴露到 Tailnet，只做一次。
-        if [ "$SERVED" = "0" ] && tailscale status --json 2>/dev/null \
-            | grep -q '"BackendState"[[:space:]]*:[[:space:]]*"Running"'; then
-            tailscale serve --bg http://127.0.0.1:80
-            SERVED=1
-        fi
+        # 2) 采集状态，供控制台读缓存。
+        ts_collect
+        STATE=$(sed -n 's/^state=//p' /tmp/ts.status 2>/dev/null)
 
-        # 未登录时 5 秒一轮，登录后 60 秒一轮（只为了跟上 DHCP 地址变化）。
-        if [ "$SERVED" = "1" ]; then
-            sleep 60
+        # 3) 只有 Running 才发布路由和 serve；退出登录后重置，
+        #    下次登录会重新发布一遍。
+        if [ "$STATE" = "Running" ]; then
+            if [ -n "$LAST_CIDR" ] && [ "$LAST_CIDR" != "$APPLIED" ]; then
+                if run_limited 20 tailscale set --advertise-routes="$LAST_CIDR" >/dev/null 2>&1; then
+                    APPLIED="$LAST_CIDR"
+                fi
+            fi
+            if [ "$SERVED" = "0" ]; then
+                run_limited 20 tailscale serve --bg http://127.0.0.1:80 >/dev/null 2>&1
+                SERVED=1
+            fi
+            sleep 30
         else
-            sleep 5
+            APPLIED=""
+            SERVED=0
+            sleep 10
         fi
     done
 ) &

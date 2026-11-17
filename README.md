@@ -23,15 +23,17 @@
 ├── .github/workflows/build-firmware.yml   # GitHub Actions 云端编译（tailscale / image 两段）
 ├── files/
 │   ├── etc/
-│   │   ├── init.d/tailscale               # procd 服务
-│   │   ├── uci-defaults/98-lan-ip         # 首次开机：DHCP / 静态 IP、关 DHCP 服务
-│   │   └── uci-defaults/99-tailscale-setup# 首次开机：LED / 打印 / 子网路由 / uhttpd / rc.local
+│   │   ├── init.d/tailscale               # procd 服务（modprobe tun）
+│   │   ├── uci-defaults/96-web-auth       # 控制台密码（默认 mt76x8）
+│   │   ├── uci-defaults/97-root-password  # root 密码哈希（可由 secret 覆盖）
+│   │   ├── uci-defaults/98-lan-ip         # DHCP / 静态 IP、关 DHCP 服务
+│   │   └── uci-defaults/99-tailscale-setup# LED / 打印 / 子网路由 / uhttpd / rc.local
+│   ├── lib/upgrade/keep.d/mt76x8          # 升级时保留 Tailscale 状态与密码
 │   └── www/
-│       ├── index.html                     # 极简控制台（状态 + 打印机 + Tailscale）
+│       ├── index.html                     # 控制台（登录 + 状态 + 操作）
 │       └── cgi-bin/
-│           ├── status.sh                  # 状态 JSON
-│           ├── action.sh                  # 操作接口（POST）
-│           └── ts-login.sh                # 授权链接 302 跳转
+│           ├── api.sh                     # 统一接口：status/logs/diag/动作
+│           └── ts-login.sh                # 授权跳转（非阻塞）
 ├── configs/
 │   ├── target.seed                        # 源码构建的目标种子配置
 │   ├── packages.set                       # 要装的包
@@ -351,9 +353,12 @@ reload_config
 ## 首次开机流程
 
 1. 刷入 `*sysupgrade.bin` 并重启。
-2. `/etc/uci-defaults/98-lan-ip` 先把本机改造成局域网主机：LAN 用 DHCP 自动
+2. `/etc/uci-defaults/96-web-auth`、`97-root-password` 设置初始密码：
+   控制台和 SSH 都是 `root` / **`mt76x8`**（可用仓库 secret
+   `ROOT_PASSWORD_HASH` 覆盖）。
+3. `/etc/uci-defaults/98-lan-ip` 把本机改造成局域网主机：LAN 用 DHCP 自动
    取地址，关闭本机的 DHCP 服务器（避免和主路由抢）。
-3. `/etc/uci-defaults/99-tailscale-setup` 自动执行：
+4. `/etc/uci-defaults/99-tailscale-setup` 自动执行：
    - 关闭 `blue:status`、`red:status`、`white:status` 等所有 LED，并写入
      `/etc/config/system`，重启后仍保持熄灭；
    - 执行 `/etc/init.d/tailscale enable`；
@@ -362,22 +367,20 @@ reload_config
    - 把 uhttpd 配成监听 **80 + 8080**（80 给 `tailscale serve` 代理，8080 给
      局域网直接访问），CGI 目录 `/www/cgi-bin`；
    - 写入 `/etc/rc.local`：
-     - 每轮从 `br-lan` 实际地址算出网段并刷新 `/etc/tailscale/lan-cidr`，
-       网段变化时调用 `tailscale set --advertise-routes=<CIDR>`；
-     - 未登录时每 5 秒检查一次 `tailscale status --json`，检测到
-       `"BackendState":"Running"` 后执行
-       `tailscale serve --bg http://127.0.0.1:80`，之后降为 60 秒一轮。
-4. 浏览器打开 `http://<设备 IP>:8080/`（IP 从主路由 DHCP 列表里按主机名
-   `mt76x8` 找），进入控制台，点击 **登录 / 重新授权**。
-5. 首次点击会等待 1~3 秒生成官方授权链接，随后 302 跳转到
-   `login.tailscale.com`。完成授权后节点即上线。
-6. Tailscale 处于 `Running` 后，`tailscale serve` 会自动把 80 端口暴露到
+     - 每 10~30 秒把 Tailscale 状态写进 `/tmp/ts.status`（控制台只读缓存）；
+     - 从 `br-lan` 实际地址算出网段，变化时调用
+       `tailscale set --advertise-routes=<CIDR>`；
+     - 检测到 `Running` 后执行 `tailscale serve --bg http://127.0.0.1:80`。
+5. 浏览器打开 `http://<设备 IP>:8080/`（IP 从主路由 DHCP 列表里按主机名
+   `mt76x8` 找），用 `root` / `mt76x8` 登录。
+6. 点 **登录 / 重新授权**，等 5~15 秒授权链接出现后点横幅跳转，完成授权。
+7. Tailscale 处于 `Running` 后，`tailscale serve` 会自动把 80 端口暴露到
    Tailnet，可通过 `https://mt76x8.<tailnet>.ts.net/` 访问。
+8. 到「安全」里把密码改掉（网页与 SSH 同步）。
 
-> **刷机时建议保留配置**：`uci-defaults` 虽然在每次刷机后都会重新执行（它们
-> 不在 sysupgrade 的保留列表里），但 `/etc/config` 里的 root 密码、SSH 主机
-> 密钥、Tailscale 状态只有保留配置才能续用。全新刷入时 root 密码为空，
-> 先通过控制台完成 Tailscale 登录，再用 `passwd` 设置密码即可。
+> **刷机建议保留配置**：`/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale`
+> （Tailscale 状态）和 `/etc/tsui.passwd` 一起保留，升级后不用重新登录
+> Tailscale，也不会丢控制台密码。
 
 > `tailscale serve` 的 HTTPS 证书要求 tailnet 已开启 HTTPS Certificates。
 > 如未开启，可在设备上手动改为 HTTP：
@@ -385,37 +388,56 @@ reload_config
 
 ## 控制台（极简 Web UI）
 
-控制台是 `files/www/index.html` + 两个 CGI 脚本，纯静态 HTML + 内联 JS，
-不依赖 CDN、Lua 或 LuCI，压缩后只占几 KB：
+控制台是 `files/www/index.html` + 一个统一 CGI，纯静态 HTML + 内联 JS，
+不依赖 CDN、Lua 或 LuCI：
 
 | 路径 | 作用 |
 | --- | --- |
-| `/`、`/index.html` | 控制台页面（状态 + 操作按钮） |
-| `/cgi-bin/status.sh` | 返回状态 JSON（Tailscale / 打印机 / 网络） |
-| `/cgi-bin/action.sh` | 执行操作（POST，返回 JSON） |
-| `/cgi-bin/ts-login.sh` | 生成授权链接并 302 到 `login.tailscale.com` |
+| `/`、`/index.html` | 控制台页面 |
+| `/cgi-bin/api.sh?op=status` | 状态 JSON（只读，不需要登录） |
+| `/cgi-bin/api.sh?op=logs` | 系统日志（需要登录） |
+| `/cgi-bin/api.sh?op=diag` | 完整诊断：内存 / 进程 / 路由 / tailscale（需要登录） |
+| `POST /cgi-bin/api.sh` | 所有写操作，`op=` 指定动作 |
+| `/cgi-bin/ts-login.sh` | 兼容入口：有授权链接就 302，没有就触发一次登录再跳回控制台 |
 
-能做的事情：
+**登录**：用户名固定 `root`，密码与 SSH 相同。首次开机默认密码
+**`mt76x8`**，控制台会一直显示红色提示直到你改掉。在「安全」里改密码会同时
+写入 `/etc/tsui.passwd`（网页）和 `/etc/shadow`（SSH）。
 
-- 查看 Tailscale 状态、Tailscale IP、本机地址、网关、发布中的网段；
-- 一键登录 / 退出登录；修改要发布的子网网段；
-- 查看打印机服务状态、`/dev/usb/lp0` 是否检测到；
-- 启用 / 停用 / 重启打印服务，修改设备路径和端口；
-- 重启设备。
+> 想避免默认密码，给仓库配置 secret **`ROOT_PASSWORD_HASH`**（`openssl passwd -6`
+> 生成的 SHA-512 crypt 哈希）。工作流会把它写进 `97-root-password`，
+> 不设置则使用默认密码。
 
-> 控制台走的是局域网 + Tailnet，默认没有密码。办公室网络不放心时可以加一层
-> Basic Auth（uhttpd 原生支持，不额外占空间）：
->
-> ```sh
-> uci add uhttpd httpauth
-> uci set uhttpd.@httpauth[-1].prefix='/'
-> uci set uhttpd.@httpauth[-1].username='admin'
-> uci set uhttpd.@httpauth[-1].password='换成你的密码'
-> uci commit uhttpd
-> /etc/init.d/uhttpd restart
-> ```
->
-> 加完后 `tailscale serve` 访问也会要求同样的账号密码。
+**能做的事情**：
+
+- Tailscale：登录 / 退出、修改发布网段、显示授权链接（生成后自动出现按钮）；
+- 打印机：查看 `p910nd` 是否在监听、`/dev/usb/lp0` 是否存在、启用/停用/重启、
+  改设备路径和端口；
+- 诊断：看系统日志、内存、进程、路由、tailscaled 是否在跑；
+- 安全：修改密码（网页 + SSH 同步）；
+- 系统：重启设备。
+
+### 为什么状态是「缓存」的
+
+`tailscale` CLI 本身有 22 MB，68 MB 内存的设备上每次执行都要从 squashfs
+解压一遍。旧版控制台每次请求都同步跑 `tailscale status --json`，几个请求叠加
+就会把 uhttpd 的请求槽位占死（表现为页面一直转圈）。
+
+现在改成：
+
+```text
+rc.local 后台循环（10~30 秒一次）──写──> /tmp/ts.status
+                                              │
+浏览器 ──读取──> api.sh?op=status ─────────────┘
+```
+
+CGI 只做文件读取，不碰 tailscale；后台循环里每条 CLI 都有看门狗限时
+（设备没有 `timeout` 命令），单条命令最多卡 8~20 秒就会被杀掉重来。
+这样无论 tailscaled 是否正常，控制台都不会失去响应。
+
+> 另外 `tailscale` 需要 `/dev/net/tun`。`/etc/init.d/tailscale` 现在会先
+> `modprobe tun` 并在缺失时手动 `mknod`，避免内核模块没加载导致 tailscaled
+> 卡在启动阶段。
 
 ## LED、Reset 按键与 Breed
 

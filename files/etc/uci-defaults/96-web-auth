@@ -1,0 +1,22 @@
+#!/bin/sh
+# 首次开机：给网页控制台创建登录密码（默认与 root 密码相同：mt76x8）。
+#
+# 控制台用 salt + SHA-256 校验密码（设备上没有 crypt 工具，也不值得为一个
+# 登录框装 OpenSSL）。修改密码走控制台的「修改密码」，会同时更新
+# /etc/tsui.passwd 和 /etc/shadow，所以网页密码和 SSH 密码保持一致。
+
+# 保留已有的密码文件（sysupgrade 保留配置时 /lib/upgrade/keep.d 会带上它）。
+[ -s /etc/tsui.passwd ] && exit 0
+
+SALT=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-32)
+[ -n "$SALT" ] || SALT=$(date +%s)
+PASSWORD='mt76x8'
+HASH=$(printf '%s:%s' "$SALT" "$PASSWORD" | sha256sum | cut -d' ' -f1)
+
+printf '%s:%s\n' "$SALT" "$HASH" > /etc/tsui.passwd
+chmod 600 /etc/tsui.passwd
+
+# 标记仍在使用默认密码，控制台首页会提示修改。
+: > /etc/tsui.default
+
+exit 0

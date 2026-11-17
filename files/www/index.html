@@ -16,8 +16,13 @@
     font-size: 15px; line-height: 1.6;
   }
   main { max-width: 560px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
   h1 { margin: 4px 0 2px; font-size: 20px; }
   .sub { margin: 0 0 16px; color: #7f90ad; font-size: 12px; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.15); color: #9fb0cc; }
+  .pill.ok { color: #4ade80; border-color: rgba(74,222,128,.35); }
+  .pill.warn { color: #f6c177; border-color: rgba(246,193,119,.35); }
+  .pill.bad { color: #f87171; border-color: rgba(248,113,113,.35); }
   .card {
     margin: 0 0 14px; padding: 16px;
     border: 1px solid rgba(120,160,255,.16); border-radius: 14px;
@@ -27,52 +32,71 @@
     margin: 0 0 12px; font-size: 13px; font-weight: 700;
     letter-spacing: .08em; color: #7dd3fc; text-transform: uppercase;
   }
-  .row {
-    display: flex; justify-content: space-between; gap: 12px;
-    padding: 7px 0; border-top: 1px solid rgba(255,255,255,.05);
-  }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,.05); }
   .row:first-of-type { border-top: 0; }
   .k { color: #8ea3c7; font-size: 13px; flex: 0 0 auto; }
   .v { text-align: right; word-break: break-all; font-variant-numeric: tabular-nums; }
-  .ok { color: #4ade80; }
-  .warn { color: #f6c177; }
-  .bad { color: #f87171; }
+  .ok { color: #4ade80; } .warn { color: #f6c177; } .bad { color: #f87171; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
   .field { display: flex; gap: 8px; margin-top: 10px; }
   input {
     flex: 1 1 auto; min-width: 0; padding: 10px 12px;
     border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
-    background: #0e1729; color: inherit; font-size: 14px;
-    font-family: inherit;
+    background: #0e1729; color: inherit; font-size: 14px; font-family: inherit;
   }
   input:focus { outline: 2px solid rgba(37,99,235,.55); outline-offset: 1px; }
   .btn {
-    flex: 0 0 auto; padding: 10px 14px;
-    border: 0; border-radius: 9px; cursor: pointer;
+    flex: 0 0 auto; padding: 10px 14px; border: 0; border-radius: 9px; cursor: pointer;
     background: #2563eb; color: #fff; font-size: 14px; font-weight: 700;
-    font-family: inherit; text-decoration: none; display: inline-block;
-    text-align: center;
+    font-family: inherit; text-decoration: none; display: inline-block; text-align: center;
   }
   .btn:active { filter: brightness(.92); }
   .btn.ghost { background: rgba(255,255,255,.08); color: #cfe0ff; }
   .btn.danger { background: #b91c1c; }
   .btn.small { padding: 7px 11px; font-size: 13px; }
-  .btn[disabled] { opacity: .5; cursor: default; }
+  .btn.block { width: 100%; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .hint { margin: 10px 0 0; color: #7f90ad; font-size: 12px; line-height: 1.55; }
+  .alert {
+    margin: 0 0 14px; padding: 10px 14px; border-radius: 10px;
+    background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.26);
+    color: #f6c177; font-size: 13px; line-height: 1.6;
+  }
+  .authbanner {
+    display: block; margin: 0 0 14px; padding: 14px 16px; border-radius: 12px;
+    background: linear-gradient(135deg, #2563eb, #06b6d4); color: #fff;
+    font-weight: 700; text-decoration: none; text-align: center;
+  }
+  pre {
+    margin: 12px 0 0; padding: 12px; max-height: 320px; overflow: auto;
+    background: #05080f; border: 1px solid rgba(255,255,255,.08); border-radius: 10px;
+    font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+  }
+  .hide { display: none !important; }
   #toast {
     position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%) translateY(80px);
     max-width: 88vw; padding: 10px 16px; border-radius: 10px;
     background: #1e293b; border: 1px solid rgba(255,255,255,.12);
-    font-size: 13px; opacity: 0; transition: .2s; pointer-events: none;
+    font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; z-index: 9;
   }
   #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 </style>
 </head>
 <body>
 <main>
-  <h1>MT76x8 控制台</h1>
-  <p class="sub">Tailscale 子网路由 · USB 打印共享</p>
+  <header>
+    <div>
+      <h1>MT76x8 控制台</h1>
+      <p class="sub">Tailscale 子网路由 · USB 打印共享</p>
+    </div>
+    <span class="pill" id="pill">连接中…</span>
+  </header>
+
+  <div id="alert-default" class="alert hide">
+    仍在使用默认密码（<span class="mono">mt76x8</span>），请登录后到「安全」里修改。
+  </div>
+
+  <a id="auth-url" class="authbanner hide" target="_blank" rel="noreferrer">打开 Tailscale 授权页面 →</a>
 
   <section class="card">
     <h2>状态</h2>
@@ -81,54 +105,80 @@
     <div class="row"><span class="k">发布网段</span><span class="v mono" id="ts-routes">—</span></div>
     <div class="row"><span class="k">本机地址</span><span class="v mono" id="lan-ip">—</span></div>
     <div class="row"><span class="k">网关</span><span class="v mono" id="lan-gw">—</span></div>
-    <div class="row"><span class="k">主机名</span><span class="v mono" id="hostname">—</span></div>
+    <div class="row"><span class="k">内存 / 运行时间</span><span class="v mono" id="sys-info">—</span></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="login-card">
+    <h2>登录</h2>
+    <p class="hint" style="margin:0 0 6px">用户名固定为 <span class="mono">root</span>，密码与 SSH 相同。</p>
+    <div class="field">
+      <input id="login-password" type="password" placeholder="密码" autocomplete="current-password">
+      <button class="btn" id="login-btn">登录</button>
+    </div>
+  </section>
+
+  <section class="card hide auth-only">
     <h2>Tailscale</h2>
     <div class="actions">
-      <a class="btn" href="/cgi-bin/ts-login.sh">登录 / 重新授权</a>
-      <button class="btn ghost small" data-act="tailscale_logout">退出登录</button>
+      <button class="btn" data-act="ts_login">登录 / 重新授权</button>
+      <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
     </div>
     <div class="field">
       <input id="routes-input" placeholder="192.168.1.0/24" autocomplete="off">
-      <button class="btn small" data-act="routes">保存网段</button>
+      <button class="btn small" data-act="ts_routes">保存网段</button>
     </div>
-    <p class="hint">
-      登录后需在 Tailscale 管理后台批准该网段：Machines → 本机 → Edit route settings。
-      留空表示不发布子网路由。
-    </p>
+    <p class="hint">发布网段后需要到 Tailscale 后台 Machines → 本机 → Edit route settings 批准。</p>
   </section>
 
-  <section class="card">
+  <section class="card hide auth-only">
     <h2>USB 打印机</h2>
     <div class="row"><span class="k">服务状态</span><span class="v" id="prn-run">—</span></div>
     <div class="row"><span class="k">设备节点</span><span class="v" id="prn-dev">—</span></div>
     <div class="row"><span class="k">监听端口</span><span class="v mono" id="prn-port">—</span></div>
     <div class="actions">
-      <button class="btn small" id="prn-toggle" data-act="printer_toggle">启用 / 停用</button>
+      <button class="btn small" data-act="printer_toggle">启用 / 停用</button>
       <button class="btn ghost small" data-act="printer_restart">重启服务</button>
     </div>
     <div class="field">
-      <input id="prn-device-input" placeholder="/dev/usb/lp0" autocomplete="off">
+      <input id="prn-device-input" placeholder="/dev/usb/lp0" list="prn-devices" autocomplete="off">
+      <datalist id="prn-devices"></datalist>
       <button class="btn small" data-act="printer_device">保存设备</button>
     </div>
     <div class="field">
       <input id="prn-port-input" placeholder="0（表示 9100）" inputmode="numeric" autocomplete="off">
       <button class="btn small" data-act="printer_port">保存端口</button>
     </div>
-    <p class="hint">
-      添加打印机时用 RAW / 9100 或 <span class="mono">socket://本机地址:9100</span>。
-    </p>
+    <p class="hint">电脑上添加打印机：TCP/IP + RAW 9100，或 <span class="mono">socket://本机地址:9100</span>。</p>
   </section>
 
-  <section class="card">
+  <section class="card hide auth-only">
+    <h2>诊断</h2>
+    <div class="actions">
+      <button class="btn ghost small" data-act="show_logs">系统日志</button>
+      <button class="btn ghost small" data-act="show_diag">完整诊断</button>
+    </div>
+    <pre id="diag-output" class="hide"></pre>
+  </section>
+
+  <section class="card hide auth-only">
+    <h2>安全</h2>
+    <div class="field">
+      <input id="old-password" type="password" placeholder="当前密码" autocomplete="current-password">
+    </div>
+    <div class="field">
+      <input id="new-password" type="password" placeholder="新密码（至少 6 位）" autocomplete="new-password">
+      <button class="btn small" data-act="set_password">修改</button>
+    </div>
+    <p class="hint">修改后会同时更新网页密码和 SSH root 密码。</p>
+  </section>
+
+  <section class="card hide auth-only">
     <h2>系统</h2>
     <div class="actions">
-      <button class="btn ghost small" id="refresh">刷新</button>
+      <button class="btn ghost small" data-act="refresh">刷新</button>
+      <button class="btn ghost small" data-act="logout">退出控制台</button>
       <button class="btn danger small" data-act="reboot" data-confirm="1">重启设备</button>
     </div>
-    <p class="hint">重启会断开连接，约 30 秒后恢复。</p>
   </section>
 </main>
 
@@ -144,68 +194,132 @@
     el.textContent = msg;
     el.className = 'show';
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.className = ''; }, 2600);
+    toastTimer = setTimeout(function () { el.className = ''; }, 3000);
   }
 
-  function setText(id, text, cls) {
+  function text(id, value, cls) {
     var el = $(id);
     if (!el) return;
-    el.textContent = text;
+    el.textContent = value;
     el.className = 'v' + (cls ? ' ' + cls : '');
   }
 
-  function stateText(s) {
-    if (!s) return ['未知', 'warn'];
+  function stateLabel(s) {
     if (s === 'Running') return ['已连接', 'ok'];
     if (s === 'NeedsLogin') return ['等待授权', 'warn'];
     if (s === 'Stopped') return ['已停止', 'bad'];
+    if (s === 'Starting') return ['启动中', 'warn'];
+    if (!s) return ['未知', 'warn'];
     return [s, 'warn'];
   }
 
+  function render(j) {
+    var st = stateLabel(j.ts_state);
+    var pill = $('pill');
+    pill.textContent = st[0];
+    pill.className = 'pill ' + st[1];
+
+    text('ts-state', st[0], st[1]);
+    text('ts-ip', j.ts_ip || '—');
+    text('ts-routes', j.ts_routes || '（未发布）');
+    text('lan-ip', j.lan_ip || '—');
+    text('lan-gw', j.lan_gateway || '—');
+    text('sys-info', (j.mem_free || '?') + ' MB 可用 / ' + (j.uptime || '?') + ' 秒');
+
+    var run = j.printer_running
+      ? ['运行中', 'ok']
+      : (j.printer_enabled === '1' ? ['已启用但未运行', 'warn'] : ['已停用', 'bad']);
+    text('prn-run', run[0], run[1]);
+    text('prn-dev', (j.printer_device || '—') + (j.printer_present ? '（已检测到）' : '（未检测到）'));
+    text('prn-port', 'TCP ' + (j.printer_tcp_port || '9100'));
+
+    var dl = $('prn-devices');
+    dl.innerHTML = '';
+    (j.printer_devices || '').split(' ').forEach(function (d) {
+      if (!d) return;
+      var o = document.createElement('option');
+      o.value = d;
+      dl.appendChild(o);
+    });
+
+    if (document.activeElement !== $('routes-input')) $('routes-input').value = j.ts_routes || '';
+    if (document.activeElement !== $('prn-device-input')) $('prn-device-input').value = j.printer_device || '';
+    if (document.activeElement !== $('prn-port-input')) $('prn-port-input').value = j.printer_port || '';
+
+    var banner = $('auth-url');
+    if (j.ts_auth_url) {
+      banner.href = j.ts_auth_url;
+      banner.classList.remove('hide');
+    } else {
+      banner.classList.add('hide');
+    }
+
+    $('alert-default').classList.toggle('hide', !j.default_password);
+
+    document.body.classList.toggle('authed', j.auth === 1);
+    $('login-card').classList.toggle('hide', j.auth === 1);
+    Array.prototype.forEach.call(document.querySelectorAll('.auth-only'), function (el) {
+      el.classList.toggle('hide', j.auth !== 1);
+    });
+  }
+
   function refresh() {
-    fetch('/cgi-bin/status.sh', { cache: 'no-store' })
+    fetch('/cgi-bin/api.sh?op=status', { cache: 'no-store' })
       .then(function (r) { return r.json(); })
-      .then(function (j) {
-        var st = stateText(j.ts_state);
-        setText('ts-state', st[0], st[1]);
-        setText('ts-ip', j.ts_ip || '—');
-        setText('ts-routes', j.ts_routes || '（未发布）');
-        setText('lan-ip', j.lan_ip || '—');
-        setText('lan-gw', j.lan_gateway || '—');
-        setText('hostname', j.hostname || '—');
+      .then(render)
+      .catch(function () { $('pill').textContent = '离线'; $('pill').className = 'pill bad'; });
+  }
 
-        var run = j.printer_running === '1'
-          ? ['运行中', 'ok']
-          : (j.printer_enabled === '1' ? ['已启用但未运行', 'warn'] : ['已停用', 'bad']);
-        setText('prn-run', run[0], run[1]);
-        setText('prn-dev', (j.printer_device || '—') + (j.printer_present === '1' ? '（已检测到）' : '（未检测到）'));
-        setText('prn-port', 'TCP ' + (j.printer_tcp_port || '9100'));
-
-        if (document.activeElement !== $('routes-input')) {
-          $('routes-input').value = j.ts_routes || '';
-        }
-        if (document.activeElement !== $('prn-device-input')) {
-          $('prn-device-input').value = j.printer_device || '';
-        }
-        if (document.activeElement !== $('prn-port-input')) {
-          $('prn-port-input').value = j.printer_port || '';
-        }
-      })
-      .catch(function () { toast('状态读取失败'); });
+  function post(cmd, extra) {
+    var body = new URLSearchParams();
+    body.set('op', cmd);
+    if (extra) Object.keys(extra).forEach(function (k) { body.set(k, extra[k]); });
+    return fetch('/cgi-bin/api.sh', { method: 'POST', body: body })
+      .then(function (r) { return r.json(); });
   }
 
   function act(cmd, extra) {
-    var body = new URLSearchParams();
-    body.set('do', cmd);
-    if (extra) Object.keys(extra).forEach(function (k) { body.set(k, extra[k]); });
-    fetch('/cgi-bin/action.sh', { method: 'POST', body: body })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        toast(j.msg || (j.ok ? '完成' : '失败'));
-        refresh();
-      })
-      .catch(function () { toast('请求失败'); });
+    post(cmd, extra).then(function (j) {
+      toast(j.msg || (j.ok ? '完成' : '失败'));
+      if (cmd === 'logout') {
+        document.body.classList.remove('authed');
+        $('login-card').classList.remove('hide');
+        Array.prototype.forEach.call(document.querySelectorAll('.auth-only'), function (el) {
+          el.classList.add('hide');
+        });
+      }
+      refresh();
+    }).catch(function () { toast('请求失败'); });
   }
+
+  function showDiag(op) {
+    fetch('/cgi-bin/api.sh?op=' + op, { cache: 'no-store' })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var pre = $('diag-output');
+        pre.textContent = t || '(空)';
+        pre.classList.remove('hide');
+      })
+      .catch(function () { toast('读取失败'); });
+  }
+
+  $('login-btn').addEventListener('click', function () {
+    var pw = $('login-password').value;
+    if (!pw) { toast('请输入密码'); return; }
+    post('login', { password: pw }).then(function (j) {
+      if (j.ok) {
+        $('login-password').value = '';
+        toast('登录成功');
+        refresh();
+      } else {
+        toast(j.msg || '登录失败');
+      }
+    });
+  });
+
+  $('login-password').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') $('login-btn').click();
+  });
 
   document.addEventListener('click', function (ev) {
     var el = ev.target.closest('[data-act]');
@@ -213,18 +327,26 @@
     var cmd = el.getAttribute('data-act');
     if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
 
-    if (cmd === 'routes') {
-      act(cmd, { cidr: $('routes-input').value.trim() });
-    } else if (cmd === 'printer_device') {
-      act(cmd, { device: $('prn-device-input').value.trim() });
-    } else if (cmd === 'printer_port') {
-      act(cmd, { port: $('prn-port-input').value.trim() });
-    } else {
-      act(cmd);
+    if (cmd === 'refresh') { refresh(); toast('已刷新'); return; }
+    if (cmd === 'show_logs') { showDiag('logs'); return; }
+    if (cmd === 'show_diag') { showDiag('diag'); return; }
+    if (cmd === 'logout') { act('logout'); return; }
+    if (cmd === 'ts_routes') { act(cmd, { cidr: $('routes-input').value.trim() }); return; }
+    if (cmd === 'printer_device') { act(cmd, { device: $('prn-device-input').value.trim() }); return; }
+    if (cmd === 'printer_port') { act(cmd, { port: $('prn-port-input').value.trim() }); return; }
+    if (cmd === 'set_password') {
+      var oldPw = $('old-password').value;
+      var newPw = $('new-password').value;
+      if (!oldPw || newPw.length < 6) { toast('请填写原密码，新密码至少 6 位'); return; }
+      post(cmd, { old: oldPw, new: newPw }).then(function (j) {
+        toast(j.msg || (j.ok ? '完成' : '失败'));
+        if (j.ok) { $('old-password').value = ''; $('new-password').value = ''; refresh(); }
+      });
+      return;
     }
+    act(cmd);
   });
 
-  $('refresh').addEventListener('click', function () { refresh(); toast('已刷新'); });
   refresh();
   setInterval(refresh, 10000);
 })();
