@@ -1,557 +1,91 @@
 # MT76x8 ImmortalWrt + Tailscale（OrayBox X1）
 
-面向 **MT76x8 / 16MB ROM / 64MB RAM** 的极简 ImmortalWrt 固件工程。固件内置
-单文件 `tailscaled`（内嵌 CLI），首次开机自动关闭所有 LED、启用 Tailscale，
-并提供一个小型 Web 控制台（状态 / 打印机 / Tailscale）。登录 Tailnet 后会自动
-执行 `tailscale serve`，把本地 80 端口暴露到 Tailnet。
+把 **OrayBox X1**（MT76x8 / 16MB Flash / 64MB RAM）变成一个
+**办公室 Tailscale 子网路由器 + USB 打印共享盒子**。
 
-在这台设备上的实际用途：**办公室的 Tailscale 子网路由器 + USB 打印共享盒子**。
+- 内置单文件 `tailscaled`（21.0 MiB），首次开机自动启用 Tailscale；
+- 登录后把办公室网段发布为子网路由，人在外面也能访问内网设备；
+- 板载 USB-A 接打印机，`p910nd` 提供 TCP 9100（RAW）；
+- 自带小型 Web 控制台（登录 / 状态 / 打印 / 诊断），**没有 LuCI**；
+- 首次开机自动关闭所有 LED；LAN 用 DHCP 自动取地址，不和主路由抢 DHCP。
 
-- 加入 Tailnet 后把办公室所在网段发布为子网路由，人在外面也能访问办公室
-  局域网里的设备；
-- 板载 USB-A 口接打印机，`p910nd` 把 `/dev/usb/lp0` 映射成 TCP **9100**，
-  同事的电脑（Windows/macOS/Linux）都能像本地网络打印机一样添加。
+> 设备：**OrayBox X1**（`board_name = oraybox,x1`，ImageBuilder profile
+> `oraybox_x1`），16MB NOR + 64MB RAM，带 Breed。
 
-> 本仓库对应的实际设备：**OrayBox X1**（`board_name = oraybox,x1`，
-> ImageBuilder profile = **`oraybox_x1`**）。设备当前运行 ImmortalWrt
-> 25.12.2，16MB NOR + 64MB RAM，带 Breed。
+## 快速开始
+
+| 步骤 | 做什么 |
+| --- | --- |
+| 1. 构建 | push 到 `main` 自动构建，或 Actions → Run workflow 手动触发 |
+| 2. 下载 | run 页面 artifact，或打 `v*` 标签后从 Releases 下载 |
+| 3. 刷机 | 断开办公室网线，按住 Reset 上电进 Breed（192.168.1.1）刷 `*sysupgrade.bin` |
+| 4. 找地址 | 接回办公室，在主路由 DHCP 列表里按主机名 `mt76x8` 找 |
+| 5. 登录 | `http://<设备 IP>/`，用户名 `root`，密码 **`mt76x8`**（登录后立刻改） |
+| 6. 授权 | 控制台点「登录 / 重新授权」，授权链接出现后点开完成 |
+| 7. 批准 | Tailscale 后台 Machines → mt76x8 → Edit route settings |
+
+镜像大小 **11,928,349 字节**，分区上限 15,728,640 字节（余量 3.6 MiB）。
+
+> 刷机请优先用 Breed：25.12.2 → 23.05.4 属于降级，OpenWrt 内置 sysupgrade
+> 可能拒绝。Breed 的地址也是 `192.168.1.1`，和办公室主路由冲突，刷机时要
+> 断开办公室网线、电脑直连。
+
+## 默认地址
+
+| 场景 | 地址 |
+| --- | --- |
+| 控制台 | `http://<设备 IP>/`（uhttpd 同时监听 80 和 8080） |
+| Tailscale | `https://mt76x8.<tailnet>.ts.net/`（需开启 HTTPS Certificates） |
+| SSH | `ssh root@<设备 IP>` |
+| 打印 | `socket://<设备 IP>:9100`（RAW 9100） |
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/network.md](docs/network.md) | 拓扑、DHCP/静态地址、子网路由与 SNAT |
+| [docs/printing.md](docs/printing.md) | USB 打印、RAW 9100、HP P1008 这类主机型打印机 |
+| [docs/console.md](docs/console.md) | 控制台功能、统一 API、状态缓存机制 |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | 转圈、崩溃循环、找不到 IP、打印机不工作 |
+| [docs/build.md](docs/build.md) | 构建流水线、触发方式、体积历史与取舍 |
+| [docs/hardware.md](docs/hardware.md) | LED、Reset、Breed 与刷机恢复 |
+| [docs/source-build.md](docs/source-build.md) | 可选的源码构建（改内核/设备树时） |
 
 ## 目录结构
 
 ```text
 .
-├── .github/workflows/build-firmware.yml   # GitHub Actions 云端编译（tailscale / image 两段）
-├── files/
-│   ├── etc/
-│   │   ├── init.d/tailscale               # procd 服务（modprobe tun）
-│   │   ├── uci-defaults/96-web-auth       # 控制台密码（默认 mt76x8）
-│   │   ├── uci-defaults/97-root-password  # root 密码哈希（可由 secret 覆盖）
-│   │   ├── uci-defaults/98-lan-ip         # DHCP / 静态 IP、关 DHCP 服务
-│   │   └── uci-defaults/99-tailscale-setup# LED / 打印 / 子网路由 / uhttpd / rc.local
+├── .github/workflows/build-firmware.yml   # push/tag/manual 触发构建
+├── files/                                 # 打进 rootfs 的覆盖层
+│   ├── etc/init.d/tailscale               # procd 服务（modprobe tun）
+│   ├── etc/uci-defaults/96-web-auth       # 控制台密码
+│   ├── etc/uci-defaults/97-root-password  # root 密码哈希
+│   ├── etc/uci-defaults/98-lan-ip         # DHCP / 静态地址、关 DHCP 服务
+│   ├── etc/uci-defaults/99-tailscale-setup# LED / 打印 / 路由 / uhttpd / rc.local
 │   ├── lib/upgrade/keep.d/mt76x8          # 升级时保留 Tailscale 状态与密码
-│   └── www/
-│       ├── index.html                     # 控制台（登录 + 状态 + 操作）
-│       └── cgi-bin/
-│           ├── api.sh                     # 统一接口：status/logs/diag/动作
-│           └── ts-login.sh                # 授权跳转（非阻塞）
-├── configs/
-│   ├── target.seed                        # 源码构建的目标种子配置
-│   ├── packages.set                       # 要装的包
-│   └── packages.unset                     # 要剔除的包
-├── dts/mt7628an_oraybox_x1.dts            # 上游板级 DTS 副本（核对分区/LED/按键）
-├── patches/README.md                      # 源码构建补丁目录约定（当前为空）
-├── docs/source-build.md                   # 可选的源码构建流水线说明
+│   └── www/                               # 控制台 + api.sh + ts-login.sh
+├── configs/                               # 源码构建用的包列表 / 目标种子
+├── dts/mt7628an_oraybox_x1.dts            # 上游板级 DTS 副本
+├── patches/README.md                      # 源码构建补丁约定
+├── docs/                                  # 详细文档
 └── README.md
 ```
 
-## 如何触发编译
+## 已知限制
 
-1. 打开 GitHub 仓库的 **Actions** 页面。
-2. 选择 **Build MT76x8 Tailscale Firmware**。
-3. 点击 **Run workflow**。
-4. 填写输入参数：
+- **64MB 内存**：批量走 Tailscale 传输会把单核打满，隧道和控制台都会变慢；
+  这台设备的定位是「控制面 + 打印 + 轻量内网访问」，不适合当下载机或 NAS 网关。
+- **WiFi 默认关闭**：AP/客户端模式还在评估（见 docs/network.md 的后续计划）。
+- **控制台密码**用 salted SHA-256（设备上没有 crypt 工具），够 LAN 用；
+  默认 `mt76x8`，务必在「安全」里改掉。
+- **空密码 SSH 不可用**：OpenWrt 的 dropbear 不接受空密码，所以镜像里预置了
+  默认密码。
 
-   | 输入 | 默认值 | 说明 |
-   | --- | --- | --- |
-   | `profile` | `oraybox_x1` | 设备 profile；`list` 仅列出所有 mt76x8 profile |
-   | `tailscale_tag` | 空 | 固定 Tailscale 版本（如 `v1.104.7`）；空 = 取最新稳定版 |
-   | `lan_mode` | `auto` | `auto` = 从主路由 DHCP 自动取地址；`static` = 固定地址 |
-   | `lan_ip` | `192.168.1.2` | 仅 `lan_mode=static` 时生效 |
-   | `lan_gateway` | `192.168.1.1` | 仅 `lan_mode=static` 时生效 |
-
-   > 不确定型号时先运行一次 `profile=list`，在 job 的 Summary 或日志中查看
-   > `Available Profiles` 列表。
-   >
-   > **默认的 `lan_mode=auto` 不需要知道办公室网段**：设备会用 DHCP 自动拿
-   > 地址、网关和 DNS，也不会和主路由抢地址。只有在需要固定地址时才切到
-   > `static`，并且 `lan_ip` 不能等于 `lan_gateway`（工作流会直接拒绝）。
-
-5. 编译成功后，在 run 页面底部下载
-   `immortalwrt-mt76x8-<profile>-<run_number>` artifact，里面包含
-   `*sysupgrade.bin` 和 `sha256sums`。
-
-流水线分成两个 job，可以分别重跑：
-
-| job | 内容 | 耗时 |
-| --- | --- | --- |
-| `Build tailscaled (mipsle)` | 拉 Tailscale 源码，`GOARCH=mipsle GOMIPS=softfloat` 交叉编译，上传 `tailscaled-mipsle` artifact | 4~6 分钟 |
-| `Build image (<profile>)` | 下载上面的 artifact，用 ImageBuilder 装包 + 塞 `files/` + 打包 | 3~6 分钟 |
-
-只想换脚本/换包时，`tailscaled` job 的产物没有变化，但 GitHub Actions 的
-写法是「job 依赖」，所以仍会重跑一次（Go 侧有 `setup-go` 缓存，通常 1 分钟
-以内）。想固定 Tailscale 版本，可在 `tailscale_tag` 输入框填 `v1.104.7`
-之类的 tag；留空则自动取最新稳定版。
-
-工作流使用 ImmortalWrt **23.05.4** 的 `ramips/mt76x8` ImageBuilder，剔除
-LuCI/PPP/IPv6 相关包，并把 TLS 栈从 OpenSSL 换成 mbedTLS：
-
-```text
-ca-bundle kmod-tun iptables-nft uhttpd
-kmod-usb-printer p910nd
-wpad-basic-mbedtls libustream-mbedtls20201210
--wpad-basic-openssl -libustream-openssl -libustream-openssl20201210
--luci -luci-ssl -luci-app-firewall
--luci-app-opkg -luci-compat -luci-lib-base -luci-lib-ipkg
--default-settings -default-settings-chn -ipv6helper
--odhcpd-ipv6only -ppp -ppp-mod-pppoe -ip6tables -odhcp6c
-```
-
-保留 `uhttpd` 有两个用途：托管控制台（`/www` + `/cgi-bin`），并让
-`tailscale serve --bg http://127.0.0.1:80` 在本机 80 端口有可代理的目标。
-uhttpd 同时监听 80 和 8080，所以局域网可以直接访问，也不再多起一个
-BusyBox httpd 进程。
-
-> **为什么 `libustream` 要写两个 negate**：默认包列表里出现的是选择器名
-> `libustream-openssl`，真正的实现包叫 `libustream-openssl20201210`。只去掉
-> 后者，选择器仍会把 openssl 实现装回来，并和 mbedtls 版争抢
-> `/lib/libustream-ssl.so`，构建直接失败（run `44005400819`）。两个都去掉，
-> 才会走 `libustream-mbedtls20201210`。
-
-> **为什么 negate 列表这么长**：只写 `-luci` 并不能移除 LuCI。默认包列表里
-> `default-settings` 直接依赖 `luci`，`default-settings-chn` 依赖
-> `luci-i18n-base-zh-cn`，`luci-app-opkg`/`luci-compat`/`luci-lib-ipkg` 依赖
-> `luci-base`，`ipv6helper` 依赖 `odhcp6c`/`odhcpd-ipv6only`。opkg 会把它们
-> 作为依赖重新装回来，所以必须把这些「入口包」也一起去掉。
-> 去掉 `default-settings` 后主机名/时区会退回默认值，已由
-> `99-tailscale-setup` 补回 `mt76x8` / `CST-8`。
-
-## 已实测的构建结果
-
-用 `profile=oraybox_x1` 跑通的真实构建（`run 44015933949`，提交 `8f7c59a`）：
-
-| 项目 | 数值 |
-| --- | --- |
-| tailscaled（mipsle softfloat，静态链接） | 22,020,287 字节（21.0 MiB） |
-| `*squashfs-sysupgrade.bin` | **11,928,349 字节（11.38 MiB）** |
-| 15 MiB 分区余量 | 3,800,291 字节（3.62 MiB） |
-| sha256 | `c16c170104d22986485a80990d6ec5517aff5a688632011a7da80a4734d5f8d8` |
-| LuCI | 已彻底移除（manifest 校验通过） |
-| OpenSSL | 已彻底移除（切到 mbedTLS，省约 1.5 MiB） |
-| `p910nd` / `kmod-usb-printer` | 均已在 manifest 中 |
-
-历史对比：
-
-| 版本 | 大小 | 变化 |
-| --- | --- | --- |
-| 含 LuCI（run 43999090329） | 13,566,749 字节 | — |
-| 裁掉 LuCI（run 44001845479） | 12,976,925 字节 | −576 KiB |
-| 切 mbedTLS + USB 打印（run 44006144529） | 11,862,813 字节 | −1.09 MiB |
-| 启用 AdvertiseRoutes + 静态地址（run 44008677812） | 11,928,349 字节 | +64 KiB |
-| 控制台 / 状态缓存（run 44015933949） | 11,928,349 字节 | — |
-
-> 镜像大小会稳定在这个值附近：squashfs 按块压缩，几 KB 的脚本改动经常
-> 落在同一批块里，所以不同提交的 sysupgrade.bin 长度可能一模一样，
-> **sha256 才是判断是否同一镜像的依据**。
-
-工作流在打包后还会校验 `build_dir/*/root-ramips` 里的
-`www/index.html`、`www/cgi-bin/api.sh`、`www/cgi-bin/ts-login.sh`、
-`etc/uci-defaults/96-web-auth`、`97-root-password`、`98-lan-ip`、
-`99-tailscale-setup`、`usr/sbin/tailscaled` 是否存在、脚本是否有执行权限、
-`tailscale` 软链接是否就位，避免 FILES 覆盖层静默失效；同时检查 `.manifest`，
-一旦 `luci-base` 或 `libopenssl3` 被依赖回填就直接构建失败。
-
-## 构建的触发方式
-
-| 方式 | 用途 | 产物 |
-| --- | --- | --- |
-| **push 到 `main`** | 日常提交自动构建 | Actions artifact（保留 30 天） |
-| **打 `v*` 标签** | 发布版本 | artifact + GitHub Release 附件 |
-| **Actions → Run workflow** | 手动指定 profile / 版本 / 网段 | artifact |
+## 本地自检
 
 ```sh
-# 日常：改完直接推，自动出固件
-git push origin main
-
-# 发布：打标签，自动建 Release 并附上 sysupgrade.bin
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-push 触发很便宜（公开仓库不计费），所以不用省。几点注意：
-
-- **只改文档/配置材料不触发**：`**.md`、`docs/`、`configs/`、`patches/`、
-  `dts/` 都在 `paths-ignore` 里，避免改 README 也跑一次 5 分钟构建；
-- **同分支并发只保留最新一次**：`concurrency` 会自动取消被打断的旧构建；
-- **tag 构建一定触发**（path 过滤对 tag 不生效），适合做「可回滚的版本点」；
-- push/tag 触发时没有手动输入，默认 `profile=oraybox_x1`、`lan_mode=auto`；
-  要固定地址或指定 Tailscale 版本，仍然用 Run workflow。
-
-## USB 打印共享
-
-板载 USB-A 口在 SoC 的 `mt7628an.dtsi` 里默认启用（`usbphy`/`ehci`/`ohci`
-都没有 `status = "disabled"`），官方支持提交也写明
-`USB: 1x USB Type-A 2.0 Host Port`，所以**不需要改设备树、不需要重编内核**。
-
-固件里只加了两个包：
-
-| 包 | 作用 | 大小 |
-| --- | --- | --- |
-| `kmod-usb-printer` | 提供 `/dev/usb/lp0` | 8 KiB |
-| `p910nd` | 把打印数据流转成 TCP 9100 | 11.6 KiB |
-
-首次开机时 `99-tailscale-setup` 会写入：
-
-```text
-config p910nd 'printer'
-    option device '/dev/usb/lp0'
-    option port '0'          # 0 表示 TCP 9100
-    option bidirectional '1'
-    option enabled '1'
-```
-
-**添加打印机（Windows）**：设置 → 蓝牙和设备 → 打印机和扫描仪 → 添加设备
-→ 我需要的打印机不在列表中 → 使用 TCP/IP 地址添加 → 设备类型选 **TCP/IP**，
-地址 `<设备 IP>`，端口 **9100**（RAW），驱动选打印机自带驱动。
-
-**macOS / Linux**：
-
-```sh
-lpadmin -p office -E -v socket://<设备 IP>:9100 -m everywhere
-```
-
-### RAW 9100 到底是谁的能力
-
-- **打印机不认识 9100**。USB 打印机没有网络协议栈，它只会通过 USB 收字节。
-- **9100 端口是路由器上的 `p910nd` 提供的**：它监听 TCP 9100，把收到的字节
-  原样写进 `/dev/usb/lp0`。
-- **RAW 是客户端发送方式**：Windows 的「Standard TCP/IP Port」里可以选择
-  `Raw` 或 `LPR`。选 `Raw` + 9100 就是「把驱动输出的字节直接塞进 TCP 连接」，
-  不加任何 LPR 控制字符。`p910nd` 只支持 RAW，不支持 LPR（515）。
-- Windows 10/11 **原生支持**这种端口，不需要装任何第三方软件，也不用在
-  打印机上做任何设置。PowerShell 一行就能建：
-
-  ```powershell
-  Add-PrinterPort -Name "IP_<设备 IP>" -PrinterHostAddress "<设备 IP>" -PortNumber 9100
-  ```
-
-  注意：HP 某些驱动自带「HP Standard TCP/IP Port」端口监视器，会做 SNMP
-  状态查询或双向握手，这类端口在 9100 上容易报「打印机无响应」；改用
-  Microsoft 自带的 Standard TCP/IP Port 即可。
-
-**验证**：
-
-```sh
-# 打印机插上后应出现设备节点
-ls -l /dev/usb/lp0
-# 服务应处于 running
-/etc/init.d/p910nd status
-netstat -ltn | grep 9100
-```
-
-如果 `lp0` 不存在，先确认打印机被识别：
-
-```sh
-dmesg | grep -i usblp
-lsusb 2>/dev/null || cat /sys/kernel/debug/usb/devices
-```
-
-正常会看到类似 `usblp0: USB Bidirectional printer dev 3 if 0 alt 0`。
-
-### HP P1008 这类「主机型」打印机
-
-HP LaserJet P1005/P1006/P1007/**P1008**/P1505 属于 GDI/主机型打印机：
-打印机本身只会解释 **ZJS（ZjStream）** 光栅数据，不支持 PCL/PostScript，
-也没有板载字体。
-
-`p910nd` 只是把 TCP 9100 收到的字节原样写到 `/dev/usb/lp0`，路由器不参与
-解释，所以能不能打印取决于**客户端驱动**：
-
-| 客户端 | 情况 |
-| --- | --- |
-| Windows | 装 HP 的 P1008 驱动，端口选 Standard TCP/IP + RAW 9100，一般可用；部分驱动要在端口属性里**关闭双向支持 / SNMP 状态**，否则会卡在「打印机无响应」 |
-| Linux | 客户端需要 `foo2zjs`（自带 P1008 的 ZJS 驱动，可能还会在任务开头上传固件），路由器侧不用装任何驱动 |
-| macOS | 新系统没有 P1008 官方驱动，基本用不了；老系统配合 foo2zjs 才有机会 |
-
-判断依据很简单：**只要客户端能在这台打印机直连 USB 时打印，改成
-`socket://<设备 IP>:9100` 后通常也能打印**，因为发出去的字节流完全一样。
-
-不能打印的典型情况：
-
-- 驱动在提交任务前要做双向状态握手，而 9100 端口是单向的；
-- 打印机是纯 GDI 且客户端没有对应驱动（想发 PCL/PS 给它，它看不懂）。
-
-排查时可以在电脑上直接灌一段原始数据测试链路（字节能到打印机就说明
-USB 和 9100 都通，问题在驱动格式）：
-
-```sh
-# Linux / macOS
-printf 'test\n' | nc <设备 IP> 9100
-```
-
-```powershell
-# Windows PowerShell
-$c = New-Object Net.Sockets.TcpClient('<设备 IP>', 9100)
-$s = $c.GetStream(); $b = [Text.Encoding]::ASCII.GetBytes("test`r`n")
-$s.Write($b, 0, $b.Length); $s.Flush(); $c.Close()
-```
-
-> 结论：**USB 硬件和固件层面支持 P1008**（标准 USB 打印类，`usblp` 能认），
-> 路由器也搬得动；真正的限制在客户端驱动是否能生成 ZJS 数据。
-
-## 子网路由（办公室局域网访问）
-
-固件把设备本身配置成 Tailscale 子网路由器：
-
-1. 开机时从 `network.lan` 的地址/掩码算出网段（`ipcalc.sh`），写进
-   `/etc/tailscale/lan-cidr`（例如 `192.168.1.0/24`）；
-2. `tailscale up` 带上 `--advertise-routes=<CIDR>`（登录页跳转时也一样）；
-3. 打开 `net.ipv4.ip_forward=1`，并把 `tailscale0` 加进防火墙的 `lan` zone；
-4. 登录成功后再执行一次 `tailscale set --advertise-routes=<CIDR>`，保证改了
-   LAN 网段也能生效。
-
-> 编译 tailscaled 时必须保留 `AdvertiseRoutes` 这个 feature（不能带
-> `ts_omit_advertiseroutes`），否则 `--advertise-routes` 虽然能写进 prefs，
-> 本机不会把发布的网段当作本地网络处理，子网路由实际不生效。
-
-> **为什么不需要在主路由上加静态路由**：本机不是办公室局域网的网关，
-> 内网设备回包时会发给主路由。Tailscale 的 `--snat-subnet-routes`（默认开启）
-> 会把来自 Tailnet 的流量源地址伪装成本机的局域网地址，于是内网设备直接把
-> 回包发给本机，不经过主路由的路由表。
-
-**还需要手动批准路由**：Tailscale 管理后台 → **Machines** → 找到
-`mt76x8` → 右侧 `...` → **Edit route settings** → 勾选实际网段
-（控制台首页会显示，例如 `192.168.1.0/24`）。不批准的话，其他 Tailnet
-成员看不到这个网段。
-
-客户端侧如果要用这个子网，需要接受路由：
-
-```sh
-# Linux
-sudo tailscale up --accept-routes
-# Windows / macOS 在托盘菜单里勾选 "Use Tailscale subnets"
-```
-
-验证：
-
-```sh
-tailscale status --json | grep -i advertisedroutes
-ip route show table all | grep 192.168.1
-```
-
-## 网络拓扑与地址
-
-这台设备**不是**办公室的主路由，只是插在交换机上的一台普通主机：
-
-```text
-Internet
-   │
-主路由（DHCP 服务器 + 网关，网段未知也没关系）
-   │
-办公室交换机 ── 同事电脑 / NAS / 打印机 …
-   │
-OrayBox X1（Tailscale 子网路由 + 打印服务，地址由 DHCP 下发）
-```
-
-因此固件**不能**沿用 OpenWrt 默认的 `192.168.1.1`：那会和主路由抢地址，
-自带的 DHCP 服务器也会和主路由抢发地址。首启脚本
-`/etc/uci-defaults/98-lan-ip` 默认把本机设成 **DHCP 客户端**：
-
-| 项 | 值 |
-| --- | --- |
-| 本机地址 | **DHCP 自动获取**（不用管办公室是 `192.168.1.x` 还是 `10.x`） |
-| 网关 / DNS | 由主路由通过 DHCP 下发 |
-| LAN DHCP 服务器 | **关闭**（`dhcp.lan.ignore=1`） |
-| 主机名 | `mt76x8` |
-
-**怎么找到它的地址**：登录办公室主路由的管理页面，在 DHCP 客户端 / 已连接设备
-列表里找主机名 **`mt76x8`**。设备启动后也可以看状态灯（固件默认把灯全关了，
-所以看不到灯，这是预期行为）。
-
-需要固定地址时（例如主路由不给 DHCP 保留），构建时把 `lan_mode` 改成
-`static`，并填好 `lan_ip` / `lan_gateway`；或者刷机后手动改：
-
-```sh
-uci set network.lan.proto='static'
-uci set network.lan.ipaddr='192.168.1.2'
-uci set network.lan.gateway='192.168.1.1'
-uci set network.lan.dns='192.168.1.1'
-uci commit network
-reload_config
-```
-
-子网路由要发布的网段由 `rc.local` 从 `br-lan` 的实际地址算出（`ipcalc.sh` 折算
-成网络地址），DHCP 换地址后会自动跟着更新，不需要手工维护路由表。
-
-## 默认访问地址
-
-| 场景 | 地址 |
-| --- | --- |
-| 局域网控制台（uhttpd，8080） | **http://<设备 IP>:8080/** |
-| 局域网控制台（uhttpd，80） | `http://<设备 IP>/` |
-| Tailscale 登录后（Serve） | `https://mt76x8.<你的-tailnet>.ts.net/` |
-| SSH | `ssh root@<设备 IP>`（或 Tailscale IP） |
-| 打印（RAW 9100） | `socket://<设备 IP>:9100` |
-
-设备 IP 用主路由 DHCP 列表里的地址，或登录后在控制台首页直接看到。
-
-## 首次开机流程
-
-1. 刷入 `*sysupgrade.bin` 并重启。
-2. `/etc/uci-defaults/96-web-auth`、`97-root-password` 设置初始密码：
-   控制台和 SSH 都是 `root` / **`mt76x8`**（可用仓库 secret
-   `ROOT_PASSWORD_HASH` 覆盖）。
-3. `/etc/uci-defaults/98-lan-ip` 把本机改造成局域网主机：LAN 用 DHCP 自动
-   取地址，关闭本机的 DHCP 服务器（避免和主路由抢）。
-4. `/etc/uci-defaults/99-tailscale-setup` 自动执行：
-   - 关闭 `blue:status`、`red:status`、`white:status` 等所有 LED，并写入
-     `/etc/config/system`，重启后仍保持熄灭；
-   - 执行 `/etc/init.d/tailscale enable`；
-   - 启用 `p910nd`（`/dev/usb/lp0` → TCP 9100）；
-   - 打开 `ip_forward`、把 `tailscale0` 加进 `lan` 防火墙 zone；
-   - 把 uhttpd 配成监听 **80 + 8080**（80 给 `tailscale serve` 代理，8080 给
-     局域网直接访问），CGI 目录 `/www/cgi-bin`；
-   - 写入 `/etc/rc.local`：
-     - 每 10~30 秒把 Tailscale 状态写进 `/tmp/ts.status`（控制台只读缓存）；
-     - 从 `br-lan` 实际地址算出网段，变化时调用
-       `tailscale set --advertise-routes=<CIDR>`；
-     - 检测到 `Running` 后执行 `tailscale serve --bg http://127.0.0.1:80`。
-5. 浏览器打开 `http://<设备 IP>:8080/`（IP 从主路由 DHCP 列表里按主机名
-   `mt76x8` 找），用 `root` / `mt76x8` 登录。
-6. 点 **登录 / 重新授权**，等 5~15 秒授权链接出现后点横幅跳转，完成授权。
-7. Tailscale 处于 `Running` 后，`tailscale serve` 会自动把 80 端口暴露到
-   Tailnet，可通过 `https://mt76x8.<tailnet>.ts.net/` 访问。
-8. 到「安全」里把密码改掉（网页与 SSH 同步）。
-
-> **刷机建议保留配置**：`/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale`
-> （Tailscale 状态）和 `/etc/tsui.passwd` 一起保留，升级后不用重新登录
-> Tailscale，也不会丢控制台密码。
-
-> `tailscale serve` 的 HTTPS 证书要求 tailnet 已开启 HTTPS Certificates。
-> 如未开启，可在设备上手动改为 HTTP：
-> `tailscale serve --bg --http=80 http://127.0.0.1:80`。
-
-## 控制台（极简 Web UI）
-
-控制台是 `files/www/index.html` + 一个统一 CGI，纯静态 HTML + 内联 JS，
-不依赖 CDN、Lua 或 LuCI：
-
-| 路径 | 作用 |
-| --- | --- |
-| `/`、`/index.html` | 控制台页面 |
-| `/cgi-bin/api.sh?op=status` | 状态 JSON（只读，不需要登录） |
-| `/cgi-bin/api.sh?op=logs` | 系统日志（需要登录） |
-| `/cgi-bin/api.sh?op=diag` | 完整诊断：内存 / 进程 / 路由 / tailscale（需要登录） |
-| `POST /cgi-bin/api.sh` | 所有写操作，`op=` 指定动作 |
-| `/cgi-bin/ts-login.sh` | 兼容入口：有授权链接就 302，没有就触发一次登录再跳回控制台 |
-
-**登录**：用户名固定 `root`，密码与 SSH 相同。首次开机默认密码
-**`mt76x8`**，控制台会一直显示红色提示直到你改掉。在「安全」里改密码会同时
-写入 `/etc/tsui.passwd`（网页）和 `/etc/shadow`（SSH）。
-
-> 想避免默认密码，给仓库配置 secret **`ROOT_PASSWORD_HASH`**（`openssl passwd -6`
-> 生成的 SHA-512 crypt 哈希）。工作流会把它写进 `97-root-password`，
-> 不设置则使用默认密码。
-
-**能做的事情**：
-
-- Tailscale：登录 / 退出、修改发布网段、显示授权链接（生成后自动出现按钮）；
-- 打印机：查看 `p910nd` 是否在监听、`/dev/usb/lp0` 是否存在、启用/停用/重启、
-  改设备路径和端口；
-- 诊断：看系统日志、内存、进程、路由、tailscaled 是否在跑；
-- 安全：修改密码（网页 + SSH 同步）；
-- 系统：重启设备。
-
-### 为什么状态是「缓存」的
-
-`tailscale` CLI 本身有 22 MB，68 MB 内存的设备上每次执行都要从 squashfs
-解压一遍。旧版控制台每次请求都同步跑 `tailscale status --json`，几个请求叠加
-就会把 uhttpd 的请求槽位占死（表现为页面一直转圈）。
-
-现在改成：
-
-```text
-rc.local 后台循环（10~30 秒一次）──写──> /tmp/ts.status
-                                              │
-浏览器 ──读取──> api.sh?op=status ─────────────┘
-```
-
-CGI 只做文件读取，不碰 tailscale；后台循环里每条 CLI 都有看门狗限时
-（设备没有 `timeout` 命令），单条命令最多卡 8~20 秒就会被杀掉重来。
-这样无论 tailscaled 是否正常，控制台都不会失去响应。
-
-> 另外 `tailscale` 需要 `/dev/net/tun`。`/etc/init.d/tailscale` 现在会先
-> `modprobe tun` 并在缺失时手动 `mknod`，避免内核模块没加载导致 tailscaled
-> 卡在启动阶段。
-
-## LED、Reset 按键与 Breed
-
-- **LED**：初始化脚本会删除原有 LED 配置，为每个 `/sys/class/leds/*` 写入
-  `trigger=none`、`default=0`，因此开机后所有指示灯保持关闭。
-- **Reset 按键**：保留 OpenWrt 默认 `/etc/rc.button/reset` 行为——
-  短按重启；长按约 5 秒执行 `factoryreset -y` 并重启。
-- **Breed**：设备带 Breed 引导。建议刷机前在 Breed Web 控制台备份
-  `factory`/`bdinfo`/`reserve` 等分区；变砖时可断电按住 Reset 再上电进入
-  Breed 恢复。日常升级也可在 OpenWrt 内直接刷 sysupgrade。
-
-## 重要说明
-
-### 1. Go 版本不是 1.23
-
-需求中的 Go 1.23 与 Tailscale 最新代码不兼容：当前 Tailscale
-`go.mod` 要求 **Go 1.27.x**。工作流通过
-`actions/setup-go` 的 `go-version-file: tailscale/go.mod` 自动安装匹配版本，
-否则固定 1.23 会在编译阶段直接失败。
-
-### 2. 16MB 空间非常紧张
-
-Tailscale 官方的 `ts_omit_*` 精简标签并不够狠：按需求给出的 8 个标签编译，
-mipsle 单文件二进制约 **38 MiB**（xz9 后约 7.5 MiB），几乎撑爆 15 MiB 分区。
-
-工作流因此改用「保留必需功能、其余全部 omit」的标签集，由官方工具生成：
-
-```sh
-go run ./cmd/featuretags --min --add \
-  serve,cli,osrouter,nattraversal,dns,useroutes,iptables,c2n,portmapper,tailnetlock,ipnbus,health,cliconndiag
-```
-
-结果约 **20.9 MiB**（xz9 后约 4.6 MiB），可在 15 MiB 分区内留出余量。
-其中：
-
-- `serve` / `netstack` 必须保留，否则 `tailscale serve` 不可用；
-- `dns`、`iptables`、`useroutes` 保留，`--accept-routes` 与 DNS 才能工作；
-- 丢弃 `aws`、`kube`、`ssh`、`webclient`、`drive`、`taildrop`、`systray`
-  等与本设备无关的功能。
-
-工作流仍会检查生成的 `sysupgrade.bin` 大小，超过 `15728640` 字节时
-**直接失败并拒绝上传**，避免刷入半截固件。
-
-如果构建因体积失败，可选方案：
-
-- 继续追加 `ts_omit_*`（会牺牲部分路由/DNS 能力）；
-- 使用外置 U 盘 + extroot 存放 `tailscaled`；
-- 改用 32MB Flash 的硬件，或对现有设备扩容。
-
-### 3. 从 25.12.2 降级到 23.05.4
-
-设备当前是 25.12.2。通过 OpenWrt 内置 sysupgrade 跨大版本降级可能被拒绝，
-建议优先通过 **Breed** 刷入 23.05.4 的 sysupgrade 镜像；刷机前务必备份
-`factory` 分区与当前配置。
-
-### 4. 为什么不做源码构建
-
-ImageBuilder 不编内核，所以 3~6 分钟就出固件；源码构建要先把
-tools/toolchain/内核全部交叉编译一遍，冷启动 40~90 分钟，GitHub 托管 runner
-的 14 GB 磁盘也不够，得先删 SDK 腾出 25~30 GB。
-
-更关键的是收益很小：`sysupgrade.bin` 里内核只占约 2.5 MiB，其中大部分还是
-squashfs 元数据和基础配置，内核侧优化到极限也只能再省 100~300 KB。真正的大头
-是 `tailscaled`（4.6 MiB）和 OpenSSL 栈（已通过换 mbedTLS 去掉 1.5 MiB）。
-
-需要改内核/设备树/驱动时再走这条路，材料已经准备好：
-
-- `dts/mt7628an_oraybox_x1.dts`：上游板级 DTS 副本（分区、LED、Reset）
-- `configs/target.seed`、`configs/packages.set`、`configs/packages.unset`
-- `patches/README.md`：补丁目录约定
-- `docs/source-build.md`：三阶段流水线、缓存 key、磁盘约束
-
-## 本地改动后自检
-
-```sh
-# 检查脚本语法（BusyBox sh 兼容）
+sh -n files/www/cgi-bin/api.sh
 sh -n files/www/cgi-bin/ts-login.sh
 sh -n files/etc/uci-defaults/99-tailscale-setup
-sh -n files/etc/init.d/tailscale
-
-# 检查换行符（应全部为 LF）
-file .github/workflows/build-firmware.yml files/www/cgi-bin/ts-login.sh
+python3 -c "import yaml;yaml.safe_load(open('.github/workflows/build-firmware.yml'))"
 ```
