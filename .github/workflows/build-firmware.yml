@@ -125,14 +125,33 @@ jobs:
 
       - name: Cross-compile tailscaled (linux/mipsle softfloat)
         working-directory: tailscale
+        env:
+          TS_TAG: ${{ steps.resolve.outputs.ts_tag }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out"
+
+          # 用 -buildvcs=false 时 Go 不会嵌 VCS 信息，Tailscale 读不到就退回
+          # "<VERSION.txt>-ERR-BuildInfo"（管理后台里会显示成
+          # 1.105.0-ERR-BuildInfo）。这里显式注入版本戳，格式与官方
+          # build_dist.sh 的仓库构建一致：x.y.z-t<commit>。
+          SHORT="${TS_TAG#v}"
+          COMMIT=$(git rev-parse --short=10 HEAD)
+          LONG="${SHORT}-t${COMMIT}"
+          echo "版本戳: $LONG"
+
           CGO_ENABLED=0 GOOS=linux GOARCH=mipsle GOMIPS=softfloat \
-            go build -trimpath -buildvcs=false -ldflags="-s -w" \
+            go build -trimpath -buildvcs=false \
+            -ldflags="-s -w -X tailscale.com/version.longStamp=${LONG} -X tailscale.com/version.shortStamp=${SHORT} -X tailscale.com/version.gitCommitStamp=${COMMIT}" \
             -tags "$TS_BUILD_TAGS" \
             -o "$GITHUB_WORKSPACE/out/tailscaled" ./cmd/tailscaled
           ls -lh "$GITHUB_WORKSPACE/out/"
+
+          # 确认版本戳真的写进了二进制（否则 tailscale 会报 -ERR-BuildInfo）。
+          if ! grep -aq "$LONG" "$GITHUB_WORKSPACE/out/tailscaled"; then
+            echo "::error::版本戳 $LONG 未写入 tailscaled"
+            exit 1
+          fi
           file "$GITHUB_WORKSPACE/out/tailscaled"
 
       - name: Upload tailscaled
