@@ -181,6 +181,22 @@ if [ "$OP" = "status" ]; then
     TS_IP=$(status_value ip)
     TS_AUTH=$(status_value auth)
 
+    # 登录流程是否在跑（ts_login 写的锁）。前端用它决定显示「正在生成授权链接」，
+    # 而不是干等一个文案；锁最长 300 秒，超时视为已结束。
+    TS_LOGIN_PENDING=0
+    TS_LOGIN_AGE=0
+    if [ -f /tmp/ts-login.lock ]; then
+        TS_LOGIN_AGE=$(( $(date +%s) - $(cat /tmp/ts-login.lock 2>/dev/null || echo 0) ))
+        case "$TS_LOGIN_AGE" in
+            ''|*[!0-9]*) TS_LOGIN_AGE=0 ;;
+        esac
+        if [ "$TS_LOGIN_AGE" -ge 0 ] && [ "$TS_LOGIN_AGE" -lt 300 ]; then
+            TS_LOGIN_PENDING=1
+        else
+            TS_LOGIN_AGE=0
+        fi
+    fi
+
     LAN_IP=$(lan_ip)
     LAN_GW=$(lan_gateway)
     LAN_PROTO=$(uci -q get network.lan.proto)
@@ -243,6 +259,8 @@ if [ "$OP" = "status" ]; then
   "ts_state": "$(json_escape "$TS_STATE")",
   "ts_ip": "$(json_escape "$TS_IP")",
   "ts_auth_url": "$(json_escape "$TS_AUTH")",
+  "ts_login_pending": $TS_LOGIN_PENDING,
+  "ts_login_age": $TS_LOGIN_AGE,
   "ts_routes": "$(json_escape "$TS_ROUTES")",
   "ts_pending": $TS_PENDING,
   "ts_lan_auto": $TS_LAN_AUTO,

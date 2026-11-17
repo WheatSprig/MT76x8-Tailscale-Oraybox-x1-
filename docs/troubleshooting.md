@@ -78,6 +78,45 @@ Tailscale 装了一条 `192.168.110.0/24 via 100.100.100.100` 的低 metric 路�
 
 远程机器不受影响，继续接受路由即可。
 
+## 同一台路由器下，电脑是 direct、设备却是 relay
+
+现象：办公室电脑和设备在同一台路由器下，`tailscale ping` 电脑是 direct，
+设备却一直走 DERP；两边 `tailscale netcheck` 的 `MappingVariesByDestIP`
+都是 `false`，看起来“环境完全一样”。
+
+先确认出口到底有几层：
+
+```powershell
+tracert -d -h 4 223.5.5.5        # Windows
+```
+
+```sh
+traceroute -n -m 4 223.5.5.5     # 设备上
+```
+
+办公室实测是三层：`192.168.110.1`（锐捷）→ `192.168.1.1` →
+`100.64.0.1`（运营商 CGNAT）→ `182.136.154.168`。所谓“公网 IP”是运营商的
+NAT 出口，设备通过 UPnP 拿到的映射只存在于**第一层**，外面两层没人转发：
+
+```text
+182.136.154.168:41642 (portmap)   ← UPnP 给的，公网根本打不进来
+182.136.154.168:58894 (stun)      ← 真正能用的
+```
+
+验证方法：从异地机器往 41642 连发几个 UDP 包，设备上
+`iptables -L INPUT -v -n` 的计数不会涨，说明端点已死。
+
+Tailscale 会把 portmap 端点排在前面试，前十几秒全打在死端口上，所以
+`tailscale ping -c 10` 看起来全是 DERP 并报 `direct connection not established`
+——这是**超时**，不是结论。给足时间（十几秒到两分钟）后通常仍能打成 direct。
+
+处理：
+
+- 测的时候多给时间：`tailscale ping --until-direct=true -c 20 <设备>`；
+- 想更稳就关掉主路由的 UPnP（三层 NAT 下它没有意义，只会广告一个死端口）；
+- CGNAT 下**不可能**做静态端口转发，不要再折腾 `UDP 41641 → 设备`；
+  自建 DERP（10ms）兜底已经够用。
+
 ## 升级后 Tailscale 要重新登录
 
 `/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale` 一起保留，所以正常

@@ -149,11 +149,18 @@
 
   /* ---------------- 控件 ---------------- */
   .btn {
+    display: inline-flex; align-items: center; justify-content: center;
     padding: 9px 14px; border: 0; border-radius: 9px; cursor: pointer;
     background: var(--accent); color: #fff; font-weight: 700; font-size: 13.5px;
+    font-family: inherit; line-height: 1.2; text-decoration: none; white-space: nowrap;
   }
+  /* <a class="btn"> 也要和 <button> 一样对齐；不加这条时链接是 inline，
+     内边距会溢出到行框外，看起来像“错位”。 */
+  .btn:link, .btn:visited { color: #fff; }
   .btn:active { filter: brightness(.92); }
-  .btn.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .btn.ghost, .btn.ghost:link, .btn.ghost:visited {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  }
   .btn.danger { background: #b91c1c; }
   .btn.small { padding: 7px 11px; font-size: 12.5px; }
   .btn[disabled] { opacity: .45; cursor: default; }
@@ -166,6 +173,18 @@
   }
   input:focus { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
   .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+  /* ---------------- 登录 / 授权等待 ---------------- */
+  .wait { display: flex; gap: 12px; align-items: flex-start; }
+  .spinner {
+    flex: 0 0 auto; width: 18px; height: 18px; margin-top: 1px;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .wait-body { min-width: 0; }
+  .wait-body b { font-size: 14px; }
+  .wait-body .hint { margin: 6px 0 0; }
 
   pre {
     margin: 12px 0 0; padding: 12px; max-height: 340px; overflow: auto;
@@ -306,8 +325,19 @@
 
       <div class="card hide" id="ov-auth-banner" style="margin-top:14px">
         <h2>Tailscale 授权</h2>
-        <p class="hint" id="ov-auth-text">授权链接生成后会自动出现。</p>
-        <a class="btn" id="ov-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
+        <div class="wait" id="ov-auth-wait">
+          <span class="spinner"></span>
+          <div class="wait-body">
+            <b>正在生成授权链接…</b>
+            <p class="hint" id="ov-auth-wait-text">通常 10~40 秒，先别离开本页。</p>
+          </div>
+        </div>
+        <div class="hide" id="ov-auth-ready">
+          <div class="actions" style="margin-top:0">
+            <a class="btn" id="ov-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
+          </div>
+          <p class="hint">在浏览器里完成授权后本页会自动更新。</p>
+        </div>
       </div>
     </section>
 
@@ -376,9 +406,21 @@
         </p>
       </div>
       <div class="card hide" id="ts-auth-card" style="margin-top:14px">
-        <h2>等待授权</h2>
-        <a class="btn" id="ts-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
-        <p class="hint">授权链接 10~40 秒内生成，过期就回概览重新点一次登录。</p>
+        <h2>Tailscale 授权</h2>
+        <div class="wait" id="ts-auth-wait">
+          <span class="spinner"></span>
+          <div class="wait-body">
+            <b>正在生成授权链接…</b>
+            <p class="hint" id="ts-auth-wait-text">要启动 tailscaled 再连一次控制面，通常 10~40 秒。</p>
+          </div>
+        </div>
+        <div class="hide" id="ts-auth-ready">
+          <div class="actions" style="margin-top:0">
+            <a class="btn" id="ts-auth-link" target="_blank" rel="noreferrer">打开授权页面</a>
+            <button class="btn ghost small" data-act="login">重新生成</button>
+          </div>
+          <p class="hint">在浏览器里完成授权后本页会自动更新；链接过期就点「重新生成」。</p>
+        </div>
       </div>
     </section>
 
@@ -593,6 +635,83 @@
     return j.ts_routes + (j.ts_pending ? '（待应用）' : '');
   }
 
+  // ---------------- 登录 / 授权等待 ----------------
+  // 点「登录」不是立刻就有链接：tailscale up 要先拉起 22MB 的 CLI，再连控制面，
+  // 才会在日志里写出 AuthURL。这段空窗期必须有明确的进度反馈，否则看起来像卡死。
+  var authWait = { started: 0, notified: false, fast: 0 };
+
+  function authElapsed() {
+    if (!authWait.started) return 0;
+    return Math.max(0, Math.round((Date.now() - authWait.started) / 1000));
+  }
+
+  function authRefreshText() {
+    var s = authElapsed();
+    var tail = s >= 90 ? '比平时慢一些，可以再等等或点「重新生成」。' : '通常 10~40 秒。';
+    ['ts-auth-wait-text', 'ov-auth-wait-text'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.textContent = '已等待 ' + s + ' 秒，' + tail;
+    });
+  }
+
+  function authCard(cardId, prefix, url, pending) {
+    var card = $(cardId);
+    if (!card) return;
+    if (!url && !pending) { card.classList.add('hide'); return; }
+    card.classList.remove('hide');
+    var wait = $(prefix + '-wait'), ready = $(prefix + '-ready');
+    if (url) {
+      wait.classList.add('hide');
+      ready.classList.remove('hide');
+      $(prefix + '-link').href = url;
+    } else {
+      ready.classList.add('hide');
+      wait.classList.remove('hide');
+      authRefreshText();
+    }
+  }
+
+  function authStartFast() {
+    if (authWait.fast) return;
+    authWait.fast = setInterval(refresh, 3000);
+  }
+
+  function authStopFast() {
+    if (authWait.fast) { clearInterval(authWait.fast); authWait.fast = 0; }
+  }
+
+  function renderAuth(j) {
+    var url = j.ts_auth_url || '';
+    var pending = j.ts_login_pending === 1;
+    // 刚点过登录、服务端还没写锁的那一两秒别把卡片收回去。
+    var grace = !url && !pending && authWait.started && (Date.now() - authWait.started) < 15000;
+    if (pending && !authWait.started) {
+      authWait.started = Date.now() - (parseInt(j.ts_login_age || 0, 10) || 0) * 1000;
+    }
+    if (!pending && !grace) authWait.started = 0;
+    var waiting = (pending || grace) && !url;
+    // 有链接就优先显示链接，哪怕 tailscale up 还在等授权。
+    authCard('ts-auth-card', 'ts-auth', url, waiting);
+    authCard('ov-auth-banner', 'ov-auth', url, waiting);
+    if (url) {
+      if (!authWait.notified) { authWait.notified = true; toast('授权链接已生成'); }
+      authStopFast();
+    } else if (pending) {
+      authWait.notified = false;
+      authStartFast();
+    } else if (!grace) {
+      authWait.notified = false;
+      authStopFast();
+    }
+  }
+
+  setInterval(function () {
+    if (!authWait.started) return;
+    if ($('ts-auth-card').classList.contains('hide') &&
+        $('ov-auth-banner').classList.contains('hide')) return;
+    authRefreshText();
+  }, 1000);
+
   function renderStatus(j) {
     if (!j || !j.ok || j.auth !== 1) {
       showLogin();
@@ -632,16 +751,7 @@
     $('btn-ts-stop').classList.toggle('hide', !j.ts_daemon);
     $('btn-ts-start').classList.toggle('hide', !!j.ts_daemon);
 
-    var authCard = $('ts-auth-card');
-    if (j.ts_auth_url) {
-      authCard.classList.remove('hide');
-      $('ts-auth-link').href = j.ts_auth_url;
-      $('ov-auth-banner').classList.remove('hide');
-      $('ov-auth-link').href = j.ts_auth_url;
-    } else {
-      authCard.classList.add('hide');
-      $('ov-auth-banner').classList.add('hide');
-    }
+    renderAuth(j);
 
     // 网络页公共字段
     setText('net-tsip', j.ts_ip || '—');
@@ -677,7 +787,9 @@
       banner.innerHTML = 'Tailscale 正在等待授权，<a href="' + j.ts_auth_url + '" target="_blank" rel="noreferrer">打开授权页面</a>。';
     } else if (j.ts_state === 'NeedsLogin') {
       banner.className = 'banner info';
-      banner.textContent = 'Tailscale 尚未登录，点「登录 / 重新授权」生成授权链接。';
+      banner.textContent = j.ts_login_pending === 1
+        ? 'Tailscale 正在登录，授权链接生成后会显示在下方。'
+        : 'Tailscale 尚未登录，点「登录 / 重新授权」生成授权链接。';
     } else {
       banner.className = 'banner hide';
     }
@@ -814,7 +926,17 @@
     if (el.getAttribute('data-confirm') && !confirm('确定要执行吗？')) return;
 
     if (op === 'login') {
-      if (state.authed) { act('ts_login'); } else { showLogin(); }
+      if (!state.authed) { showLogin(); return; }
+      // 立刻进入等待态，不等下一次轮询；否则点了没反应。
+      authWait.started = Date.now();
+      authWait.notified = false;
+      authCard('ts-auth-card', 'ts-auth', '', true);
+      authCard('ov-auth-banner', 'ov-auth', '', true);
+      authStartFast();
+      post('ts_login').then(function (j) {
+        toast(j.msg || (j.ok ? '完成' : '失败'));
+        refresh();
+      }).catch(function () { toast('请求失败'); refresh(); });
       return;
     }
     if (op === 'refresh') { refresh(); toast('已刷新'); return; }
