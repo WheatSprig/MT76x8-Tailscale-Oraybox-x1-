@@ -37,6 +37,14 @@ patches/
 4. **要改 busybox applet 列表** → 直接改 `.config` 里的
    `CONFIG_BUSYBOX_*`，不需要补丁。
 
+## 已经打进流水线的 Tailscale 补丁
+
+`ipn/ipnlocal/watchdog.go` 的 `deadlockTimeout` 从 30 秒放宽到 180 秒。
+原因：580MHz 单核上后端偶尔会忙 30 秒，watchdog 误判死锁并 panic，
+procd 重启后重新登录，表现为 Tailscale 反复掉线。真正的死锁仍会在 3 分钟后
+触发重启。补丁由 `.github/workflows/build-firmware.yml` 的
+`Relax watchdog timeout for slow MIPS CPU` 步骤在编译前 `sed` 完成。
+
 ## 补丁的验收标准
 
 每个补丁必须满足：

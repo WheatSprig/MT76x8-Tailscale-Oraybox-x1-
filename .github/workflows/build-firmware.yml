@@ -123,6 +123,17 @@ jobs:
           cache: true
           cache-dependency-path: tailscale/go.sum
 
+      # 580MHz 单核上后端偶尔会忙 30 秒，watchdog 会把它误判成死锁并 panic；
+      # procd 重启后还要重新登录，表现就是 Tailscale 反复掉线。放宽到 180 秒：
+      # 真正的死锁仍会重启，正常的慢操作不再触发。
+      - name: Relax watchdog timeout for slow MIPS CPU
+        working-directory: tailscale
+        run: |
+          set -euo pipefail
+          sed -i 's/const deadlockTimeout = 30 \* time.Second/const deadlockTimeout = 180 * time.Second/' \
+            ipn/ipnlocal/watchdog.go
+          grep -n 'deadlockTimeout =' ipn/ipnlocal/watchdog.go
+
       - name: Cross-compile tailscaled (linux/mipsle softfloat)
         working-directory: tailscale
         env:
