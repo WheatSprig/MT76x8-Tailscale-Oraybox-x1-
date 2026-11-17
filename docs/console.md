@@ -29,7 +29,7 @@
 
 **能做的事情**：
 
-- Tailscale：登录 / 退出、修改**设备名**与发布网段、开启 HTTPS、显示授权链接；
+- Tailscale：登录 / 退出、修改发布网段、开启 HTTPS、显示授权链接；
 - 打印机：查看 `p910nd` 是否在监听、`/dev/usb/lp0` 是否存在、启用/停用/重启、
   改设备路径和端口；
 - 网络：DHCP/静态地址、网关、DNS、MAC、监听端口、Tailscale 接口；
@@ -59,22 +59,27 @@ Tailscale 页的「子网路由」：
 - 保存后由后台调用一次 `tailscale set --advertise-routes=...`，新网段需要在
   Tailscale 后台批准（或由 ACL 的 `autoApprovers` 自动批准）。
 
-### 设备名（Tailscale 节点名）
+### 主机名（系统与 Tailscale 共用一个）
 
-Tailscale 页的「设备名」输入框改的是**节点在 Tailscale 后台、MagicDNS 里显示的
-名字**，不是 OpenWrt 的系统主机名：
+只有一个名字来源：`uci system.@system[0].hostname`。在「系统 → 设备 → 主机名」
+里改，保存后：
 
-- 规则同 DNS label：小写字母、数字、`-`，最长 63，不能以 `-` 开头/结尾；
-- 保存后如果已登录，立刻 `tailscale set --hostname=<名字>`；未登录就只落盘到
-  `/etc/tailscale/hostname`，连上后由后台循环补应用（`hostname.applied` 记录
-  上次成功应用的值，不一致时状态栏显示「（待应用）」）；
-- **不会新建节点**：节点密钥和 `100.x` 地址都不变，只是对外换个名字，
-  所以不会像重装后那样出现 `xxx-1`；
-- 登录（`tailscale up`）时也会带上保存的名字，不会被打回默认值。
+1. 立即写 `/proc/sys/kernel/hostname`（提示符、DHCP 上报马上变）；
+2. `uci commit system` 持久化，重启、sysupgrade 都保留；
+3. Tailscale 已连接时执行一次 `tailscale set --hostname=<名字>`，后台列表、
+   MagicDNS、`tailscale status` 里一起更新；没连接就只落盘，连上后由 rc.local
+   循环补同步（`/etc/tailscale/hostname.applied` 记上次成功值，落后时页面显示
+   「（待应用）」）；
+4. **不会新建节点**：节点密钥和 `100.x` 地址都不变，不会像重装那样多出
+   `xxx-1`。
 
-系统主机名（`uci system.@system[0].hostname`）在「系统 → 设备 → 主机名」里改，
-保存后立即写 `/proc/sys/kernel/hostname`，不用重启；它只影响设备自己
-（提示符、DHCP 上报），和上面那个 Tailscale 名字互不影响。
+规则同 DNS label：小写字母、数字、`-`，最长 63，不能以 `-` 开头/结尾。
+
+Tailscale 页只显示这个名字（只读），改名字统一在系统页，避免两个地方各存一份、
+改了这边那边不生效。
+
+> 从旧版本升级时，如果 `/etc/tailscale/hostname` 里存过单独的设备名，首次启动
+> 会把它接管成系统主机名再删掉旧文件，不会把名字重置回 `mt76x8`。
 
 > 名字在 tailnet 里已经被别的节点占用时，Tailscale 会自动加后缀（`mt76x8` →
 > `mt76x8-1`）。想让名字严格等于输入值，先去管理后台删掉同名的离线节点。

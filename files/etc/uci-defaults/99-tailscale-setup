@@ -5,9 +5,29 @@
 # ---------- 0. 基础系统标识 ----------
 # 固件剔除了 default-settings（它依赖 luci），这里补回主机名与时区。
 if [ -f /etc/config/system ]; then
-    uci -q set system.@system[0].hostname='mt76x8'
+    # 只在没有主机名时给默认值：sysupgrade 会保留 /etc/config/system，
+    # 每版都硬写会把用户改过的名字重置掉。
+    [ -n "$(uci -q get system.@system[0].hostname)" ] \
+        || uci -q set system.@system[0].hostname='mt76x8'
     uci -q set system.@system[0].timezone='CST-8'
     uci -q set system.@system[0].zonename='Asia/Shanghai'
+fi
+
+# ---------- 0b. 主机名只有一个来源：系统主机名 ----------
+# 旧版本把 Tailscale 名字单独存在 /etc/tailscale/hostname。现在统一用系统
+# 主机名，升级时把用户已经选好的名字接管过来，再删掉旧文件，避免被重置成
+# mt76x8，也避免两个名字长期打架。
+if [ -s /etc/tailscale/hostname ]; then
+    _old_name=$(head -n 1 /etc/tailscale/hostname 2>/dev/null | tr 'A-Z' 'a-z')
+    case "$_old_name" in
+        ''|*[!a-z0-9-]*|-*|*-) ;;
+        *)
+            uci -q set system.@system[0].hostname="$_old_name"
+            uci -q commit system
+            printf '%s\n' "$_old_name" > /proc/sys/kernel/hostname
+            ;;
+    esac
+    rm -f /etc/tailscale/hostname
 fi
 
 # ---------- 1. 所有 LED 保持熄灭 ----------
@@ -220,11 +240,25 @@ routes_wanted() {
 # 设备搬到别的网络后 br-lan 会变成新网段，而 prefs 里还是旧网段；这里只在
 # 「目标列表 != 上次成功广播的列表」时跑一次 CLI，并用 3 分钟退避避免在
 # 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
-# 设备名同理：离线时保存的名字，连上后由这里补应用一次。
+# 主机名只有一个来源（系统主机名）：离线时改的名字，连上后由这里补同步一次。
 hostname_wanted() {
-    _h=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+    _h=$(uci -q get system.@system[0].hostname)
+    [ -n "$_h" ] || _h=$(cat /proc/sys/kernel/hostname 2>/dev/null)
     [ -n "$_h" ] || _h=mt76x8
     echo "$_h"
+}
+
+# 和 api.sh 一样给 CLI 加看门狗：低内存时 tailscale 可能要跑两分钟以上，
+# 万一卡死不能让它一直占着 /tmp/ts-cli.lock。
+ts_set() {
+    "$@" &
+    _sp=$!
+    ( sleep 150; kill -9 "$_sp" 2>/dev/null ) &
+    _sw=$!
+    wait "$_sp" 2>/dev/null
+    _src=$?
+    kill "$_sw" 2>/dev/null
+    return $_src
 }
 
 apply_prefs() {
@@ -232,7 +266,7 @@ apply_prefs() {
     APPLIED=$(cat /etc/tailscale/advertised 2>/dev/null)
     NAME_WANT=$(hostname_wanted)
     NAME_APPLIED=$(cat /etc/tailscale/hostname.applied 2>/dev/null)
-    [ -n "$NAME_APPLIED" ] || NAME_APPLIED=mt76x8
+    [ -n "$NAME_APPLIED" ] || NAME_APPLIED="$NAME_WANT"
     [ "$WANT" = "$APPLIED" ] && [ "$NAME_WANT" = "$NAME_APPLIED" ] && return 0
     [ -f /tmp/ts-cli.lock ] && return 0
 
@@ -256,14 +290,14 @@ apply_prefs() {
             # 等锁期间用户可能又改过配置，重新读一次，避免用旧值覆盖新值。
             WANT=$(routes_wanted)
             if [ "$WANT" != "$(cat /etc/tailscale/advertised 2>/dev/null)" ]; then
-                tailscale set --advertise-routes="$WANT" >/tmp/ts_setprefs.log 2>&1 \
+                ts_set tailscale set --advertise-routes="$WANT" >/tmp/ts_setprefs.log 2>&1 \
                     && echo "$WANT" > /etc/tailscale/advertised
             fi
             NAME_WANT=$(hostname_wanted)
             NAME_APPLIED=$(cat /etc/tailscale/hostname.applied 2>/dev/null)
-            [ -n "$NAME_APPLIED" ] || NAME_APPLIED=mt76x8
+            [ -n "$NAME_APPLIED" ] || NAME_APPLIED="$NAME_WANT"
             if [ "$NAME_WANT" != "$NAME_APPLIED" ]; then
-                tailscale set --hostname="$NAME_WANT" >>/tmp/ts_setprefs.log 2>&1 \
+                ts_set tailscale set --hostname="$NAME_WANT" >>/tmp/ts_setprefs.log 2>&1 \
                     && echo "$NAME_WANT" > /etc/tailscale/hostname.applied
             fi
         fi

@@ -374,13 +374,9 @@
         <div class="row"><span class="k">Tailscale IP</span><span class="v mono" id="ts-ip">—</span></div>
         <div class="row"><span class="k">设备名</span><span class="v mono" id="ts-host">—</span></div>
         <div class="row"><span class="k">发布网段</span><span class="v mono" id="ts-routes">—</span></div>
-        <div class="field">
-          <input id="ts-name-input" placeholder="mt76x8" autocomplete="off" spellcheck="false">
-          <button class="btn small" id="btn-save-name">保存设备名</button>
-        </div>
         <p class="hint">
-          就是 Tailscale 后台、MagicDNS 里显示的名字：小写字母、数字和 <span class="mono">-</span>。
-          改完节点和 100.x 地址都不变，只是对外换个名字。
+          设备名就是系统主机名，在「系统 → 设备 → 主机名」里改；改完这里、Tailscale
+          后台和 MagicDNS 会一起更新，节点和 100.x 地址不变。
         </p>
         <div class="actions">
           <button class="btn" data-act="login">登录 / 重新授权</button>
@@ -480,8 +476,8 @@
             <button class="btn small" id="btn-save-hostname">保存主机名</button>
           </div>
           <p class="hint">
-            这是设备自己的系统主机名（提示符、DHCP 上报用），立即生效、不用重启；
-            它和 Tailscale 里显示的名字是分开的。
+            小写字母、数字和 <span class="mono">-</span>；保存后立即生效、不用重启。
+            同时会同步到 Tailscale 的设备名（后台 / MagicDNS），节点和 100.x 地址不变。
           </p>
         </div>
         <div class="card">
@@ -764,7 +760,6 @@
     setText('ts-host', (j.ts_hostname || '—') +
       (j.ts_hostname && j.ts_hostname_applied && j.ts_hostname !== j.ts_hostname_applied ? '（待应用）' : ''));
     setText('ts-routes', routesLabel(j));
-    if (document.activeElement !== $('ts-name-input')) $('ts-name-input').value = j.ts_hostname || '';
     $('lan-auto').checked = j.ts_lan_auto === 1;
     syncRouteRows((j.ts_extra || '').split(',').filter(Boolean));
     $('btn-ts-stop').classList.toggle('hide', !j.ts_daemon);
@@ -1004,32 +999,12 @@
   $('btn-add-route').addEventListener('click', function () { addRouteRow(''); });
   $('btn-save-routes').addEventListener('click', saveRoutes);
 
-  function saveHostname() {
-    var name = ($('ts-name-input').value || '').trim().toLowerCase();
-    if (!name) { toast('请填写设备名'); return; }
-    var btn = $('btn-save-name');
-    btn.disabled = true;
-    post('ts_hostname_save', { name: name }).then(function (j) {
-      toast(j.msg || (j.ok ? '完成' : '失败'));
-      btn.disabled = false;
-      refresh();
-    }).catch(function () {
-      toast('请求失败');
-      btn.disabled = false;
-    });
-  }
-
-  $('btn-save-name').addEventListener('click', saveHostname);
-  $('ts-name-input').addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter') saveHostname();
-  });
-
   function saveSysHostname() {
     var name = ($('sys-hostname-input').value || '').trim().toLowerCase();
     if (!name) { toast('请填写主机名'); return; }
     var btn = $('btn-save-hostname');
     btn.disabled = true;
-    post('sys_hostname_save', { name: name }).then(function (j) {
+    post('hostname_save', { name: name }).then(function (j) {
       toast(j.msg || (j.ok ? '完成' : '失败'));
       btn.disabled = false;
       loadSys();

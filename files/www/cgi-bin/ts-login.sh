@@ -45,7 +45,7 @@ if [ "$START" = "1" ]; then
     date +%s >/tmp/ts-login.lock
     rm -f /tmp/ts.ignore-auth
     rm -f /tmp/ts-readvertise.last
-    TS_NAME=$(head -n 1 /etc/tailscale/hostname 2>/dev/null)
+    TS_NAME=$(uci -q get system.@system[0].hostname)
     [ -n "$TS_NAME" ] || TS_NAME=mt76x8
     ADVERTISE=""
     if [ -s /etc/tailscale/lan-cidr ]; then
