@@ -1,0 +1,11 @@
+# 本地工作区：只放行工作区规范，其余一律不进版本库
+.agents/*
+!.agents/README.md
+
+# 构建产物
+*.bin
+*.ipk
+*.tar.xz
+*.zip
+*.log
+build/
