@@ -70,6 +70,8 @@ fi
 [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
 # 开机兜底：回滚未确认的 LAN 改动 + 补加救援地址。
 [ -x /etc/init.d/lan-guard ] && /etc/init.d/lan-guard enable
+# 有线网关不通时自动让 WiFi 接管默认路由。
+[ -x /etc/init.d/net-failover ] && /etc/init.d/net-failover enable
 
 # ---------- 2.5 默认关闭出厂 WiFi ----------
 # 出厂配置是开放热点 ImmortalWrt，用不上还占内存（wpad + 驱动约 4~8MB）。

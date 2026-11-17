@@ -68,6 +68,27 @@ reload_config
 会清掉手工地址，所以 `/etc/hotplug.d/iface/90-rescue-ip` 会在 br-lan 每次 up
 时补回来，`/etc/init.d/lan-guard` 负责开机时补加。
 
+### 多链路：有线挂了自动切 WiFi
+
+设备同时接了网线和 WiFi（见下一节）时，`/etc/init.d/net-failover` 会在后台
+每 15 秒 ping 一次有线网关：
+
+| 情况 | 动作 |
+| --- | --- |
+| 有线网关连续 3 次不通，且 WiFi 有默认路由 | 删掉有线默认路由，流量走 WiFi |
+| 有线网关恢复 | 把有线默认路由加回来（metric 0） |
+| 没配 wwan | 空转，什么都不做 |
+
+只改“默认路由的有无”，不动地址、不动 uci、不重启接口，所以不会把 LAN 搞乱。
+日志带 `net-failover` 标签：
+
+```sh
+logread | grep net-failover
+```
+
+典型场景：静态地址配错、网关填错，导致有线发不出去 —— 大约 45 秒后 WiFi 接管，
+Tailscale 重新连回来，再从容回滚配置。
+
 ### WiFi 第二路径（可选，默认关闭）
 
 出厂配置是开放热点 `ImmortalWrt`，固件默认把它关掉省内存。如果要在网线之外
