@@ -107,11 +107,11 @@ jobs:
           echo "tag=$TS_TAG" >> "$GITHUB_OUTPUT"
           echo "Tailscale 版本: $TS_TAG"
 
-      - name: Checkout Tailscale ${{ steps.resolve.outputs.ts_tag }}
+      - name: Checkout Tailscale ${{ steps.resolve.outputs.tag }}
         uses: actions/checkout@v4
         with:
           repository: tailscale/tailscale
-          ref: ${{ steps.resolve.outputs.ts_tag }}
+          ref: ${{ steps.resolve.outputs.tag }}
           fetch-depth: 1
           path: tailscale
 
@@ -126,7 +126,7 @@ jobs:
       - name: Cross-compile tailscaled (linux/mipsle softfloat)
         working-directory: tailscale
         env:
-          TS_TAG: ${{ steps.resolve.outputs.ts_tag }}
+          TS_TAG: ${{ steps.resolve.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/out"
