@@ -17,9 +17,9 @@ start_service() {
     fi
 
     procd_open_instance
-    # 64MB 内存下，GOGC 太低会让 Go 运行时一直 GC，580MHz 单核会被拖死。
-    # 用默认 GOGC + 软上限，让 tailscaled 在内存吃紧时再回收。
-    procd_set_param env GOGC=100 GOMEMLIMIT=36MiB
+    # 64MB 内存下，GOGC 太低会让 Go 运行时一直 GC；GOMEMLIMIT 也不能压得太狠，
+    # 实测 36MiB 时 RSS 只有 17MB 但 CPU 被 GC 抢走。现在给到 48MiB。
+    procd_set_param env GOGC=100 GOMEMLIMIT=48MiB
     procd_set_param command /usr/sbin/tailscaled \
         --state=/etc/tailscale/tailscaled.state \
         --socket=/var/run/tailscale/tailscaled.sock \

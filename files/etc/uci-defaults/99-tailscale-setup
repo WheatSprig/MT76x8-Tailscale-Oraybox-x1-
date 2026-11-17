@@ -44,6 +44,20 @@ mkdir -p /etc/tailscale
 chmod 700 /etc/tailscale
 [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
 
+# ---------- 2.5 关闭 WiFi ----------
+# 这台设备是网线接入的打印/路由盒子，AP 用不上；hostapd + wpa_supplicant
+# 在 64MB 内存里要占 8MB 左右，关掉能给 tailscaled 留出余量。
+# 以后要做 AP / 客户端模式时，改这里（或加 lan_mode 同级的开关）。
+if [ -f /etc/config/wireless ]; then
+    for dev in $(uci -q show wireless 2>/dev/null \
+        | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p'); do
+        uci -q set "wireless.$dev.disabled='1'"
+    done
+    uci -q commit wireless
+    /etc/init.d/wpad stop >/dev/null 2>&1
+    /etc/init.d/wpad disable >/dev/null 2>&1
+fi
+
 # ---------- 3. USB 打印机 -> TCP 9100 ----------
 # 板载 USB-A 口在 DTS 里默认启用（ehci/ohci/usbphy 未禁用），
 # kmod-usb-printer 提供 /dev/usb/lp0，p910nd 把它映射到 9100 端口。
@@ -112,26 +126,15 @@ if [ -f /etc/config/uhttpd ]; then
     /etc/init.d/uhttpd restart >/dev/null 2>&1
 fi
 
-# ---------- 6. 开机守护：状态缓存 + 网段 + Tailscale Serve ----------
-# 关键点：CGI 不直接调用 tailscale CLI，只读 /tmp/ts.status。
-# 64MB 内存里每次执行 22MB 的 CLI 都很贵，十几个请求就足以把设备拖死。
+# ---------- 6. 开机守护：状态缓存 + 网段记录 ----------
+# 关键点：后台循环里**一个 tailscale 命令都不跑**。
+# CLI 是 22MB 的 Go 程序，580MHz 单核启动一次要十几秒；反复启动会把 CPU
+# 打满，tailscaled 的看门狗（30 秒）随即 panic，procd 重启，形成崩溃循环。
+# 路由由登录时的 `tailscale up --advertise-routes` 写进 prefs 并持久化，
+# `tailscale serve` 改成控制台里的手动按钮。
 cat >/etc/rc.local <<'RCLOCAL'
 #!/bin/sh
 # 由 /etc/uci-defaults/99-tailscale-setup 生成。
-
-# 设备没有 timeout 工具，用看门狗限制单条命令的存活时间。
-run_limited() {
-    _secs=$1
-    shift
-    "$@" &
-    _p=$!
-    ( sleep "$_secs"; kill -9 "$_p" 2>/dev/null ) &
-    _w=$!
-    wait "$_p" 2>/dev/null
-    _rc=$?
-    kill "$_w" 2>/dev/null
-    return $_rc
-}
 
 # 从 br-lan 当前地址算出要发布的网段。DHCP 的地址可能变，所以每次都要重算。
 lan_cidr() {
@@ -144,11 +147,9 @@ lan_cidr() {
 }
 
 # 把 tailscale 状态落到 /tmp/ts.status（state / ip / auth / updated）。
-# 注意：这里刻意不调用 `tailscale status`。CLI 是 22MB 的 Go 程序，
-# 580MHz 上单次解压+启动就要十几秒，轮询会把它自己拖成 100% CPU，
-# 反而让 daemon 来不及响应。状态全部从日志和接口本身推断：
+# 状态全部从日志和接口本身推断，不执行 tailscale：
 #   - AuthURL 由 tailscaled 写进 syslog；
-#   - 登录成功后内核会出现 tailscale0 并带上 100.x 地址。
+#   - 登录成功后内核出现 tailscale0 并带上 100.x 地址。
 ts_collect() {
     _auth=$(logread 2>/dev/null \
         | grep -o 'AuthURL is https://[^ ]*' | tail -n 1 | awk '{print $3}')
@@ -183,40 +184,11 @@ ts_collect() {
 mkdir -p /etc/tailscale
 
 (
-    SERVED=0
-    LAST_CIDR=""
-    APPLIED=""
-
     while true; do
-        # 1) 网段变了就刷新记录文件（DHCP 续租换了地址也能跟上）。
         CUR=$(lan_cidr)
-        if [ -n "$CUR" ] && [ "$CUR" != "$LAST_CIDR" ]; then
-            LAST_CIDR="$CUR"
-            echo "$CUR" > /etc/tailscale/lan-cidr
-        fi
-
-        # 2) 采集状态，供控制台读缓存。
+        [ -n "$CUR" ] && echo "$CUR" > /etc/tailscale/lan-cidr
         ts_collect
-        STATE=$(sed -n 's/^state=//p' /tmp/ts.status 2>/dev/null)
-
-        # 3) 只有 Running 才发布路由和 serve；退出登录后重置，
-        #    下次登录会重新发布一遍。
-        if [ "$STATE" = "Running" ]; then
-            if [ -n "$LAST_CIDR" ] && [ "$LAST_CIDR" != "$APPLIED" ]; then
-                if run_limited 120 tailscale set --advertise-routes="$LAST_CIDR" >/dev/null 2>&1; then
-                    APPLIED="$LAST_CIDR"
-                fi
-            fi
-            if [ "$SERVED" = "0" ]; then
-                run_limited 120 tailscale serve --bg http://127.0.0.1:80 >/dev/null 2>&1
-                SERVED=1
-            fi
-            sleep 30
-        else
-            APPLIED=""
-            SERVED=0
-            sleep 10
-        fi
+        sleep 15
     done
 ) &
 

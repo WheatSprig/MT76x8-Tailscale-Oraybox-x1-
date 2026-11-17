@@ -273,9 +273,6 @@ if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
         echo "== cached status =="
         cat /tmp/ts.status 2>/dev/null
         echo
-        echo "== tailscale status (CLI, max 20s) =="
-        run_limited 20 tailscale status 2>&1 | head -n 20
-        echo
         echo "== ts_login.log =="
         tail -n 20 /tmp/ts_login.log 2>/dev/null
         echo
@@ -339,7 +336,7 @@ case "$OP" in
         ;;
 
     ts_logout)
-        run_limited 20 tailscale logout >/dev/null 2>&1 || fail "退出失败（可能未登录）"
+        run_limited 120 tailscale logout >/dev/null 2>&1 || fail "退出失败（可能未登录）"
         : > /tmp/ts.status
         : > /tmp/ts.ignore-auth
         ok "已退出 Tailscale"
@@ -355,10 +352,16 @@ case "$OP" in
         printf '%s' "$CIDR" | grep -Eq \
             '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?(,([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?)*$' \
             || fail "网段格式不正确，示例：192.168.1.0/24"
-        run_limited 20 tailscale set --advertise-routes="$CIDR" >/dev/null 2>&1 \
+        run_limited 150 tailscale set --advertise-routes="$CIDR" >/dev/null 2>&1 \
             || fail "设置失败：节点可能尚未登录"
         echo "$CIDR" > /etc/tailscale/lan-cidr
         ok "已发布 $CIDR，记得在 Tailscale 后台批准"
+        ;;
+
+    ts_serve)
+        run_limited 120 tailscale serve --bg http://127.0.0.1:80 >/tmp/ts_serve.log 2>&1 \
+            || fail "开启失败：$(tail -n 2 /tmp/ts_serve.log 2>/dev/null)"
+        ok "已开启 HTTPS 访问（需 tailnet 启用 HTTPS Certificates）"
         ;;
 
     printer_toggle)
