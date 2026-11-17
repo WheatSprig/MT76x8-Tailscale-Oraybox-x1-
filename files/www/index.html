@@ -8,18 +8,18 @@
 <style>
   :root {
     color-scheme: light;
-    --bg: #f2f5fa;
+    --bg: #eef2f7;
     --panel: #ffffff;
-    --panel-2: #f7f9fc;
-    --line: #e2e8f0;
-    --text: #16233a;
-    --muted: #64748b;
-    --accent: #2563eb;
-    --accent-soft: rgba(37, 99, 235, .1);
-    --ok: #059669;
+    --panel-2: #f4f7fb;
+    --line: #d3dce8;
+    --text: #0b1526;
+    --muted: #475569;
+    --accent: #1d4ed8;
+    --accent-soft: rgba(29, 78, 216, .1);
+    --ok: #047857;
     --warn: #b45309;
-    --bad: #dc2626;
-    --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 24px rgba(15, 23, 42, .04);
+    --bad: #b91c1c;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 10px 28px rgba(15, 23, 42, .06);
   }
   body[data-theme="dark"] {
     color-scheme: dark;
@@ -98,9 +98,15 @@
 
   .banner {
     margin: 14px 0 0; padding: 10px 14px; border-radius: 10px; font-size: 13px;
-    background: rgba(251,191,36,.08); border: 1px solid rgba(251,191,36,.25); color: #fcd34d;
+    background: #fff6e0; border: 1px solid #e8b95c; color: #7a4b00;
   }
-  .banner.info { background: rgba(59,130,246,.08); border-color: rgba(59,130,246,.25); color: #bfdbfe; }
+  body[data-theme="dark"] .banner {
+    background: rgba(251,191,36,.08); border-color: rgba(251,191,36,.25); color: #fcd34d;
+  }
+  .banner.info { background: #eaf2ff; border-color: #b9cffb; color: #123a8c; }
+  body[data-theme="dark"] .banner.info {
+    background: rgba(59,130,246,.08); border-color: rgba(59,130,246,.25); color: #bfdbfe;
+  }
   .banner a { color: inherit; font-weight: 700; }
 
   /* ---------------- 卡片 ---------------- */
@@ -343,6 +349,10 @@
           <button class="btn ghost small" data-act="ts_serve">开启 HTTPS 访问</button>
           <button class="btn ghost small" data-act="ts_logout" data-confirm="1">退出登录</button>
         </div>
+        <div class="actions">
+          <button class="btn ghost small" id="btn-ts-stop" data-act="ts_stop" data-confirm="1">停止服务</button>
+          <button class="btn ghost small" id="btn-ts-start" data-act="ts_start">启动服务</button>
+        </div>
       </div>
       <div class="card" style="margin-top:14px">
         <h2>子网路由</h2>
@@ -578,6 +588,11 @@
       .then(function (r) { return r.json(); });
   }
 
+  function routesLabel(j) {
+    if (!j.ts_routes) return '未发布';
+    return j.ts_routes + (j.ts_pending ? '（待应用）' : '');
+  }
+
   function renderStatus(j) {
     if (!j || !j.ok || j.auth !== 1) {
       showLogin();
@@ -599,7 +614,7 @@
     var total = parseInt(j.mem_total || 0, 10), free = parseInt(j.mem_free || 0, 10);
     $('ov-membar').style.width = total ? Math.max(3, Math.round(free * 100 / total)) + '%' : '0%';
 
-    setText('ov-routes', j.ts_routes || '未发布');
+    setText('ov-routes', routesLabel(j));
     var run = j.printer_running
       ? ['运行中', 'ok']
       : (j.printer_enabled === '1' ? ['已启用，未运行', 'warn'] : ['已停用', 'bad']);
@@ -611,9 +626,11 @@
     setText('ts-state', st[0], st[1]);
     setText('ts-ip', j.ts_ip || '—');
     setText('ts-host', j.hostname || '—');
-    setText('ts-routes', j.ts_routes || '未发布');
+    setText('ts-routes', routesLabel(j));
     $('lan-auto').checked = j.ts_lan_auto === 1;
     syncRouteRows((j.ts_extra || '').split(',').filter(Boolean));
+    $('btn-ts-stop').classList.toggle('hide', !j.ts_daemon);
+    $('btn-ts-start').classList.toggle('hide', !!j.ts_daemon);
 
     var authCard = $('ts-auth-card');
     if (j.ts_auth_url) {
@@ -628,7 +645,7 @@
 
     // 网络页公共字段
     setText('net-tsip', j.ts_ip || '—');
-    setText('net-routes', j.ts_routes || '未发布');
+    setText('net-routes', routesLabel(j));
     setText('net-host', j.hostname || '—');
     setText('net-proto', j.lan_proto || '—');
     setText('net-ip', j.lan_ip || '—');
@@ -658,6 +675,9 @@
     } else if (j.ts_auth_url) {
       banner.className = 'banner info';
       banner.innerHTML = 'Tailscale 正在等待授权，<a href="' + j.ts_auth_url + '" target="_blank" rel="noreferrer">打开授权页面</a>。';
+    } else if (j.ts_state === 'NeedsLogin') {
+      banner.className = 'banner info';
+      banner.textContent = 'Tailscale 尚未登录，点「登录 / 重新授权」生成授权链接。';
     } else {
       banner.className = 'banner hide';
     }
@@ -801,6 +821,10 @@
     if (op === 'show_logs') { showDiag('logs'); return; }
     if (op === 'show_diag') { showDiag('diag'); return; }
     if (op === 'logout') { act('logout'); return; }
+    if (op === 'ts_stop' || op === 'ts_start') {
+      act('ts_daemon', { action: op === 'ts_stop' ? 'stop' : 'start' });
+      return;
+    }
     if (op === 'printer_device') { act(op, { device: $('prn-device-input').value.trim() }); return; }
     if (op === 'printer_port') { act(op, { port: $('prn-port-input').value.trim() }); return; }
     if (op === 'set_password') {

@@ -127,6 +127,26 @@ normalize_cidr() {
     [ -n "$NETWORK" ] && [ -n "$PREFIX" ] && echo "$NETWORK/$PREFIX"
 }
 
+# tailscaled 是否已经能接受 CLI 调用（tailscale0 上有地址）
+ts_ready() {
+    ip -4 addr show dev tailscale0 2>/dev/null | grep -q 'inet '
+}
+
+# 所有会写 prefs 的操作共用一把锁：开机循环和网页同时 set 时，后写的会覆盖
+# 先写的。拿不到锁就让调用方稍后重试，而不是并发跑两个 22MB 的 CLI。
+ts_lock_acquire() {
+    if [ -f /tmp/ts-cli.lock ]; then
+        _age=$(( $(date +%s) - $(cat /tmp/ts-cli.lock 2>/dev/null || echo 0) ))
+        [ "$_age" -lt 240 ] && return 1
+    fi
+    date +%s > /tmp/ts-cli.lock
+    return 0
+}
+
+ts_lock_release() {
+    rm -f /tmp/ts-cli.lock
+}
+
 # ---------------------------------------------------------------- 输入解析
 
 [ "$REQUEST_METHOD" = "POST" ] || REQUEST_METHOD=GET
@@ -176,6 +196,16 @@ if [ "$OP" = "status" ]; then
     [ -f /etc/tailscale/lan-auto ] && TS_LAN_AUTO=1
     TS_EXTRA=$(tr '\n' ',' < /etc/tailscale/routes 2>/dev/null | sed 's/,*$//')
 
+    # 展示「期望广播的列表」，并单独标出是否已经真正生效。
+    LAN_CIDR=$(head -n 1 /etc/tailscale/lan-cidr 2>/dev/null)
+    WANT=""
+    [ "$TS_LAN_AUTO" = "1" ] && [ -n "$LAN_CIDR" ] && WANT="$LAN_CIDR"
+    [ -n "$TS_EXTRA" ] && WANT="${WANT:+$WANT,}$TS_EXTRA"
+    TS_ROUTES="$WANT"
+    TS_APPLIED=$(head -n 1 /etc/tailscale/advertised 2>/dev/null)
+    TS_PENDING=0
+    [ "$WANT" != "$TS_APPLIED" ] && TS_PENDING=1
+
     PRN_ENABLED=$(uci -q get p910nd.printer.enabled)
     [ -n "$PRN_ENABLED" ] || PRN_ENABLED=0
     PRN_PORT=$(uci -q get p910nd.printer.port)
@@ -214,9 +244,11 @@ if [ "$OP" = "status" ]; then
   "ts_ip": "$(json_escape "$TS_IP")",
   "ts_auth_url": "$(json_escape "$TS_AUTH")",
   "ts_routes": "$(json_escape "$TS_ROUTES")",
+  "ts_pending": $TS_PENDING,
   "ts_lan_auto": $TS_LAN_AUTO,
   "ts_extra": "$(json_escape "$TS_EXTRA")",
   "ts_socket": $TS_SOCKET,
+  "ts_daemon": $TS_SOCKET,
   "ts_updated": "$(json_escape "$(status_value updated)")",
   "lan_ip": "$(json_escape "$LAN_IP")",
   "lan_gateway": "$(json_escape "$LAN_GW")",
@@ -434,23 +466,66 @@ case "$OP" in
 
         printf '%s' "$NORM" | tr ',' '\n' | sed '/^$/d' > /etc/tailscale/routes
 
+        # 和 LuCI 一样：先把改动落盘，再“应用”。Tailscale 还没连上时只落盘，
+        # 由后台循环在连上后自动应用，避免和启动过程抢 prefs。
+        if ! ts_ready; then
+            ok "已保存（Tailscale 未连接，连上后会自动应用）"
+        fi
+
+        ts_lock_acquire || fail "Tailscale 正在执行其他操作，请稍后再试（配置已保存）"
+
         if [ -z "$EFF" ]; then
-            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1 \
-                || fail "保存失败：节点可能尚未登录"
+            run_limited 150 tailscale set --advertise-routes= >/dev/null 2>&1
+            _rc=$?
+        else
+            run_limited 150 tailscale set --advertise-routes="$EFF" >/dev/null 2>&1
+            _rc=$?
+        fi
+        ts_lock_release
+
+        if [ "$_rc" -ne 0 ]; then
+            fail "应用失败：节点可能尚未登录（配置已保存，连上后会自动应用）"
+        fi
+
+        if [ -z "$EFF" ]; then
             : > /etc/tailscale/advertised
             ok "已停止发布所有子网路由"
         fi
-
-        run_limited 150 tailscale set --advertise-routes="$EFF" >/dev/null 2>&1 \
-            || fail "保存失败：节点可能尚未登录"
         echo "$EFF" > /etc/tailscale/advertised
-        ok "已发布 $EFF（新网段需在后台批准）"
+        ok "已应用 $EFF（新网段需在后台批准）"
         ;;
 
     ts_serve)
-        run_limited 120 tailscale serve --bg http://127.0.0.1:80 >/tmp/ts_serve.log 2>&1 \
-            || fail "开启失败：$(tail -n 2 /tmp/ts_serve.log 2>/dev/null)"
+        ts_lock_acquire || fail "Tailscale 正在执行其他操作，请稍后再试"
+        run_limited 120 tailscale serve --bg http://127.0.0.1:80 >/tmp/ts_serve.log 2>&1
+        _rc=$?
+        ts_lock_release
+        [ "$_rc" -eq 0 ] || fail "开启失败：$(tail -n 2 /tmp/ts_serve.log 2>/dev/null)"
         ok "已开启 HTTPS 访问（需 tailnet 启用 HTTPS Certificates）"
+        ;;
+
+    ts_daemon)
+        # 停止/启动 tailscaled 本身（不是登出）。停止会保留登录态，省内存；
+        # 启动后自动回到之前的节点身份。
+        ACT=$(param action)
+        ts_lock_acquire || fail "Tailscale 正在执行其他操作，请稍后再试"
+        case "$ACT" in
+            stop)
+                run_limited 180 /etc/init.d/tailscale stop >/dev/null 2>&1
+                : > /tmp/ts.status
+                ts_lock_release
+                ok "Tailscale 服务已停止（登录态保留）"
+                ;;
+            start)
+                /etc/init.d/tailscale start >/dev/null 2>&1
+                ts_lock_release
+                ok "Tailscale 服务已启动"
+                ;;
+            *)
+                ts_lock_release
+                fail "未知操作"
+                ;;
+        esac
         ;;
 
 

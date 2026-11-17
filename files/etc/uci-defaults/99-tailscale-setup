@@ -164,15 +164,26 @@ ts_collect() {
     _ip=$(ip -4 addr show dev tailscale0 2>/dev/null \
         | sed -n 's/.*inet \([0-9.]*\)\/[0-9]*.*/\1/p' | head -n 1)
 
-    if [ -n "$_ip" ]; then
+    # 未登录时 tailscaled 不会自己生成 AuthURL，光看 socket 会一直显示“启动中”。
+    # 从日志里读最后一次状态切换（NoState -> NeedsLogin 之类），这是 daemon
+    # 自己报的 BackendState，不依赖 CLI。
+    _hint=$(logread 2>/dev/null \
+        | grep -o 'Switching ipn state [A-Za-z]* -> [A-Za-z]*' \
+        | tail -n 1 | sed 's/.* -> //')
+
+    if [ ! -S /var/run/tailscale/tailscaled.sock ]; then
+        # 服务被停掉时日志里还留着上一次的 Running，先看 socket 才不会误报。
+        _state="Stopped"
+        _auth=""
+    elif [ -n "$_ip" ]; then
         _state="Running"
         _auth=""
     elif [ -n "$_auth" ]; then
         _state="NeedsLogin"
-    elif [ -S /var/run/tailscale/tailscaled.sock ]; then
-        _state="Starting"
+    elif [ -n "$_hint" ]; then
+        _state="$_hint"
     else
-        _state="Stopped"
+        _state="Starting"
     fi
 
     _tmp=/tmp/ts.status.$$
@@ -210,18 +221,18 @@ routes_wanted() {
 # 「目标列表 != 上次成功广播的列表」时跑一次 CLI，并用 10 分钟退避避免在
 # 未登录时反复重试（22MB 的 CLI 反复启动会把 daemon 拖进 watchdog 崩溃循环）。
 apply_routes() {
-    WANT=$1
+    WANT=$(routes_wanted)
     APPLIED=$(cat /etc/tailscale/advertised 2>/dev/null)
     [ "$WANT" = "$APPLIED" ] && return 0
     [ -z "$WANT" ] && [ -z "$APPLIED" ] && return 0
-    [ -f /tmp/ts-readvertise.lock ] && return 0
+    [ -f /tmp/ts-cli.lock ] && return 0
 
     _last=$(cat /tmp/ts-readvertise.last 2>/dev/null || echo 0)
     _now=$(date +%s)
     [ $((_now - _last)) -lt 600 ] && return 0
 
     date +%s >/tmp/ts-readvertise.last
-    : >/tmp/ts-readvertise.lock
+    date +%s >/tmp/ts-cli.lock
     (
         # 没登录时不改 prefs：等 tailscale0 出现再动手，最多等 5 分钟。
         _i=0
@@ -233,10 +244,14 @@ apply_routes() {
             _i=$((_i + 1))
         done
         if [ -n "$_ip" ]; then
-            tailscale set --advertise-routes="$WANT" >/tmp/ts_readvertise.log 2>&1 \
-                && echo "$WANT" > /etc/tailscale/advertised
+            # 等锁期间用户可能又改过配置，重新读一次，避免用旧值覆盖新值。
+            WANT=$(routes_wanted)
+            if [ "$WANT" != "$(cat /etc/tailscale/advertised 2>/dev/null)" ]; then
+                tailscale set --advertise-routes="$WANT" >/tmp/ts_readvertise.log 2>&1 \
+                    && echo "$WANT" > /etc/tailscale/advertised
+            fi
         fi
-        rm -f /tmp/ts-readvertise.lock
+        rm -f /tmp/ts-cli.lock
     ) &
 }
 
@@ -245,7 +260,7 @@ apply_routes() {
         CUR=$(lan_cidr)
         if [ -n "$CUR" ]; then
             echo "$CUR" > /etc/tailscale/lan-cidr
-            apply_routes "$(routes_wanted)"
+            apply_routes
         fi
         ts_collect
         sleep 15
