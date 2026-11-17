@@ -2,12 +2,12 @@
 
 面向 **MT76x8 / 16MB ROM / 64MB RAM** 的极简 ImmortalWrt 固件工程。固件内置
 单文件 `tailscaled`（内嵌 CLI），首次开机自动关闭所有 LED、启用 Tailscale，
-并在 8080 端口提供节点授权页面。登录 Tailnet 后会自动执行 `tailscale serve`，
-把本地 80 端口暴露到 Tailnet。
+并提供一个小型 Web 控制台（状态 / 打印机 / Tailscale）。登录 Tailnet 后会自动
+执行 `tailscale serve`，把本地 80 端口暴露到 Tailnet。
 
 在这台设备上的实际用途：**办公室的 Tailscale 子网路由器 + USB 打印共享盒子**。
 
-- 加入 Tailnet 后把 `192.168.1.0/24` 发布为子网路由，人在外面也能访问办公室
+- 加入 Tailnet 后把办公室所在网段发布为子网路由，人在外面也能访问办公室
   局域网里的设备；
 - 板载 USB-A 口接打印机，`p910nd` 把 `/dev/usb/lp0` 映射成 TCP **9100**，
   同事的电脑（Windows/macOS/Linux）都能像本地网络打印机一样添加。
@@ -24,11 +24,14 @@
 ├── files/
 │   ├── etc/
 │   │   ├── init.d/tailscale               # procd 服务
-│   │   ├── uci-defaults/98-lan-ip         # 首次开机：静态 IP / 关 DHCP
-│   │   └── uci-defaults/99-tailscale-setup# 首次开机：LED 关闭 / 打印 / 子网路由 / rc.local
+│   │   ├── uci-defaults/98-lan-ip         # 首次开机：DHCP / 静态 IP、关 DHCP 服务
+│   │   └── uci-defaults/99-tailscale-setup# 首次开机：LED / 打印 / 子网路由 / uhttpd / rc.local
 │   └── www/
-│       ├── index.html                     # 移动端授权入口页
-│       └── cgi-bin/ts-login.sh            # BusyBox sh CGI，获取 AuthURL
+│       ├── index.html                     # 极简控制台（状态 + 打印机 + Tailscale）
+│       └── cgi-bin/
+│           ├── status.sh                  # 状态 JSON
+│           ├── action.sh                  # 操作接口（POST）
+│           └── ts-login.sh                # 授权链接 302 跳转
 ├── configs/
 │   ├── target.seed                        # 源码构建的目标种子配置
 │   ├── packages.set                       # 要装的包
@@ -50,13 +53,16 @@
    | --- | --- | --- |
    | `profile` | `oraybox_x1` | 设备 profile；`list` 仅列出所有 mt76x8 profile |
    | `tailscale_tag` | 空 | 固定 Tailscale 版本（如 `v1.104.7`）；空 = 取最新稳定版 |
-   | `lan_ip` | `192.168.1.2` | 本机在办公室局域网里的静态地址 |
-   | `lan_gateway` | `192.168.1.1` | 办公室主路由（网关 + DNS） |
+   | `lan_mode` | `auto` | `auto` = 从主路由 DHCP 自动取地址；`static` = 固定地址 |
+   | `lan_ip` | `192.168.1.2` | 仅 `lan_mode=static` 时生效 |
+   | `lan_gateway` | `192.168.1.1` | 仅 `lan_mode=static` 时生效 |
 
    > 不确定型号时先运行一次 `profile=list`，在 job 的 Summary 或日志中查看
    > `Available Profiles` 列表。
    >
-   > `lan_ip` 不能和主路由相同，工作流会拒绝 `lan_ip == lan_gateway` 的组合。
+   > **默认的 `lan_mode=auto` 不需要知道办公室网段**：设备会用 DHCP 自动拿
+   > 地址、网关和 DNS，也不会和主路由抢地址。只有在需要固定地址时才切到
+   > `static`，并且 `lan_ip` 不能等于 `lan_gateway`（工作流会直接拒绝）。
 
 5. 编译成功后，在 run 页面底部下载
    `immortalwrt-mt76x8-<profile>-<run_number>` artifact，里面包含
@@ -88,8 +94,10 @@ wpad-basic-mbedtls libustream-mbedtls20201210
 -odhcpd-ipv6only -ppp -ppp-mod-pppoe -ip6tables -odhcp6c
 ```
 
-保留 `uhttpd` 是为了让 `tailscale serve --bg http://127.0.0.1:80` 在本机 80
-端口有可代理的页面；BusyBox httpd 继续在 8080 端口提供同一份 `/www` 页面。
+保留 `uhttpd` 有两个用途：托管控制台（`/www` + `/cgi-bin`），并让
+`tailscale serve --bg http://127.0.0.1:80` 在本机 80 端口有可代理的目标。
+uhttpd 同时监听 80 和 8080，所以局域网可以直接访问，也不再多起一个
+BusyBox httpd 进程。
 
 > **为什么 `libustream` 要写两个 negate**：默认包列表里出现的是选择器名
 > `libustream-openssl`，真正的实现包叫 `libustream-openssl20201210`。只去掉
@@ -157,12 +165,12 @@ config p910nd 'printer'
 
 **添加打印机（Windows）**：设置 → 蓝牙和设备 → 打印机和扫描仪 → 添加设备
 → 我需要的打印机不在列表中 → 使用 TCP/IP 地址添加 → 设备类型选 **TCP/IP**，
-地址 `192.168.1.2`，端口 **9100**（RAW），驱动选打印机自带驱动。
+地址 `<设备 IP>`，端口 **9100**（RAW），驱动选打印机自带驱动。
 
 **macOS / Linux**：
 
 ```sh
-lpadmin -p office -E -v socket://192.168.1.2:9100 -m everywhere
+lpadmin -p office -E -v socket://<设备 IP>:9100 -m everywhere
 ```
 
 **验证**：
@@ -201,13 +209,14 @@ lsusb 2>/dev/null || cat /sys/kernel/debug/usb/devices
 > 本机不会把发布的网段当作本地网络处理，子网路由实际不生效。
 
 > **为什么不需要在主路由上加静态路由**：本机不是办公室局域网的网关，
-> 内网设备回包时会发给主路由 `192.168.1.1`。Tailscale 的
-> `--snat-subnet-routes`（默认开启）会把来自 Tailnet 的流量源地址伪装成
-> `192.168.1.2`，于是内网设备直接把回包发给本机，不经过主路由的路由表。
+> 内网设备回包时会发给主路由。Tailscale 的 `--snat-subnet-routes`（默认开启）
+> 会把来自 Tailnet 的流量源地址伪装成本机的局域网地址，于是内网设备直接把
+> 回包发给本机，不经过主路由的路由表。
 
 **还需要手动批准路由**：Tailscale 管理后台 → **Machines** → 找到
-`mt76x8-web` → 右侧 `...` → **Edit route settings** → 勾选
-`192.168.1.0/24`。不批准的话，其他 Tailnet 成员看不到这个网段。
+`mt76x8` → 右侧 `...` → **Edit route settings** → 勾选实际网段
+（控制台首页会显示，例如 `192.168.1.0/24`）。不批准的话，其他 Tailnet
+成员看不到这个网段。
 
 客户端侧如果要用这个子网，需要接受路由：
 
@@ -231,35 +240,33 @@ ip route show table all | grep 192.168.1
 ```text
 Internet
    │
-主路由 192.168.1.1/24（DHCP 服务器、网关）
+主路由（DHCP 服务器 + 网关，网段未知也没关系）
    │
-办公室交换机 ── 同事电脑 / 打印机共享 / NAS …
+办公室交换机 ── 同事电脑 / NAS / 打印机 …
    │
-OrayBox X1 192.168.1.2/24（Tailscale 子网路由 + 打印服务）
+OrayBox X1（Tailscale 子网路由 + 打印服务，地址由 DHCP 下发）
 ```
 
 因此固件**不能**沿用 OpenWrt 默认的 `192.168.1.1`：那会和主路由抢地址，
 自带的 DHCP 服务器也会和主路由抢发地址。首启脚本
-`/etc/uci-defaults/98-lan-ip` 会改成：
+`/etc/uci-defaults/98-lan-ip` 默认把本机设成 **DHCP 客户端**：
 
 | 项 | 值 |
 | --- | --- |
-| 本机地址 | `192.168.1.2/24`（静态） |
-| 网关 / DNS | `192.168.1.1`（主路由） |
+| 本机地址 | **DHCP 自动获取**（不用管办公室是 `192.168.1.x` 还是 `10.x`） |
+| 网关 / DNS | 由主路由通过 DHCP 下发 |
 | LAN DHCP 服务器 | **关闭**（`dhcp.lan.ignore=1`） |
 | 主机名 | `mt76x8` |
 
-构建时可以改这两个值（工作流输入 `lan_ip` / `lan_gateway`），例如办公室网段
-是 `10.0.0.0/24`：
+**怎么找到它的地址**：登录办公室主路由的管理页面，在 DHCP 客户端 / 已连接设备
+列表里找主机名 **`mt76x8`**。设备启动后也可以看状态灯（固件默认把灯全关了，
+所以看不到灯，这是预期行为）。
 
-```text
-lan_ip      = 10.0.0.2
-lan_gateway = 10.0.0.1
-```
-
-刷机后也可以手动改：
+需要固定地址时（例如主路由不给 DHCP 保留），构建时把 `lan_mode` 改成
+`static`，并填好 `lan_ip` / `lan_gateway`；或者刷机后手动改：
 
 ```sh
+uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.1.2'
 uci set network.lan.gateway='192.168.1.1'
 uci set network.lan.dns='192.168.1.1'
@@ -267,52 +274,79 @@ uci commit network
 reload_config
 ```
 
-子网路由要发布的网段由脚本自动计算（`ipcalc.sh` 从 `network.lan` 的地址和掩码
-得出网络地址），所以改完 IP 不用另外维护路由表。
+子网路由要发布的网段由 `rc.local` 从 `br-lan` 的实际地址算出（`ipcalc.sh` 折算
+成网络地址），DHCP 换地址后会自动跟着更新，不需要手工维护路由表。
 
 ## 默认访问地址
 
 | 场景 | 地址 |
 | --- | --- |
-| 局域网（BusyBox httpd，8080） | **http://192.168.1.2:8080/** |
-| Tailscale 登录后（Serve） | `https://mt76x8-web.<你的-tailnet>.ts.net/` |
-| SSH | `ssh root@192.168.1.2`（或 Tailscale IP） |
-| 打印（RAW 9100） | `socket://192.168.1.2:9100` |
+| 局域网控制台（uhttpd，8080） | **http://<设备 IP>:8080/** |
+| 局域网控制台（uhttpd，80） | `http://<设备 IP>/` |
+| Tailscale 登录后（Serve） | `https://mt76x8.<你的-tailnet>.ts.net/` |
+| SSH | `ssh root@<设备 IP>`（或 Tailscale IP） |
+| 打印（RAW 9100） | `socket://<设备 IP>:9100` |
 
-如果改了 `lan_ip`，把上面的 `192.168.1.2` 换成实际地址。
+设备 IP 用主路由 DHCP 列表里的地址，或登录后在控制台首页直接看到。
 
 ## 首次开机流程
 
 1. 刷入 `*sysupgrade.bin` 并重启。
-2. `/etc/uci-defaults/98-lan-ip` 先把本机改造成局域网主机：静态
-   `192.168.1.2/24`、网关/DNS 指向 `192.168.1.1`、关闭 LAN 上的 DHCP 服务器。
+2. `/etc/uci-defaults/98-lan-ip` 先把本机改造成局域网主机：LAN 用 DHCP 自动
+   取地址，关闭本机的 DHCP 服务器（避免和主路由抢）。
 3. `/etc/uci-defaults/99-tailscale-setup` 自动执行：
    - 关闭 `blue:status`、`red:status`、`white:status` 等所有 LED，并写入
      `/etc/config/system`，重启后仍保持熄灭；
    - 执行 `/etc/init.d/tailscale enable`；
    - 启用 `p910nd`（`/dev/usb/lp0` → TCP 9100）；
-   - 计算 LAN 网段、打开 `ip_forward`、把 `tailscale0` 加进 `lan` 防火墙 zone；
+   - 打开 `ip_forward`、把 `tailscale0` 加进 `lan` 防火墙 zone；
+   - 把 uhttpd 配成监听 **80 + 8080**（80 给 `tailscale serve` 代理，8080 给
+     局域网直接访问），CGI 目录 `/www/cgi-bin`；
    - 写入 `/etc/rc.local`：
-     - `/usr/sbin/httpd -p 8080 -h /www`
-     - 刷新 `/etc/tailscale/lan-cidr`
-     - 每 5 秒检查一次 `tailscale status --json`，检测到
+     - 每轮从 `br-lan` 实际地址算出网段并刷新 `/etc/tailscale/lan-cidr`，
+       网段变化时调用 `tailscale set --advertise-routes=<CIDR>`；
+     - 未登录时每 5 秒检查一次 `tailscale status --json`，检测到
        `"BackendState":"Running"` 后执行
-       `tailscale set --advertise-routes=<CIDR>` 和
-       `tailscale serve --bg http://127.0.0.1:80`，随后退出循环。
-4. 浏览器打开 `http://192.168.1.2:8080/`，点击 **连接 Tailscale**。
+       `tailscale serve --bg http://127.0.0.1:80`，之后降为 60 秒一轮。
+4. 浏览器打开 `http://<设备 IP>:8080/`（IP 从主路由 DHCP 列表里按主机名
+   `mt76x8` 找），进入控制台，点击 **登录 / 重新授权**。
 5. 首次点击会等待 1~3 秒生成官方授权链接，随后 302 跳转到
    `login.tailscale.com`。完成授权后节点即上线。
 6. Tailscale 处于 `Running` 后，`tailscale serve` 会自动把 80 端口暴露到
-   Tailnet，可通过 `https://mt76x8-web.<tailnet>.ts.net/` 访问。
+   Tailnet，可通过 `https://mt76x8.<tailnet>.ts.net/` 访问。
 
 > **刷机时建议保留配置**：`uci-defaults` 虽然在每次刷机后都会重新执行（它们
 > 不在 sysupgrade 的保留列表里），但 `/etc/config` 里的 root 密码、SSH 主机
 > 密钥、Tailscale 状态只有保留配置才能续用。全新刷入时 root 密码为空，
-> 先通过 8080 页面完成 Tailscale 登录，再用 `passwd` 设置密码即可。
+> 先通过控制台完成 Tailscale 登录，再用 `passwd` 设置密码即可。
 
 > `tailscale serve` 的 HTTPS 证书要求 tailnet 已开启 HTTPS Certificates。
 > 如未开启，可在设备上手动改为 HTTP：
 > `tailscale serve --bg --http=80 http://127.0.0.1:80`。
+
+## 控制台（极简 Web UI）
+
+控制台是 `files/www/index.html` + 两个 CGI 脚本，纯静态 HTML + 内联 JS，
+不依赖 CDN、Lua 或 LuCI，压缩后只占几 KB：
+
+| 路径 | 作用 |
+| --- | --- |
+| `/`、`/index.html` | 控制台页面（状态 + 操作按钮） |
+| `/cgi-bin/status.sh` | 返回状态 JSON（Tailscale / 打印机 / 网络） |
+| `/cgi-bin/action.sh` | 执行操作（POST，返回 JSON） |
+| `/cgi-bin/ts-login.sh` | 生成授权链接并 302 到 `login.tailscale.com` |
+
+能做的事情：
+
+- 查看 Tailscale 状态、Tailscale IP、本机地址、网关、发布中的网段；
+- 一键登录 / 退出登录；修改要发布的子网网段；
+- 查看打印机服务状态、`/dev/usb/lp0` 是否检测到；
+- 启用 / 停用 / 重启打印服务，修改设备路径和端口；
+- 重启设备。
+
+> 控制台走的是局域网 + Tailnet，没有额外密码。不要在不可信的网络上暴露
+> 80/8080 端口；如果办公室网络不放心，可以用 `tailscale serve` 只暴露给
+> Tailnet，并把 uhttpd 的 8080 监听删掉。
 
 ## LED、Reset 按键与 Breed
 

@@ -43,7 +43,7 @@ else
 
         (
             tailscale up $ADVERTISE \
-                --hostname=mt76x8-web --reset \
+                --hostname=mt76x8 --reset \
                 </dev/null >/tmp/ts_login.log 2>&1 &
         )
 
