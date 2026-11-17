@@ -44,6 +44,7 @@ fi
 if [ "$START" = "1" ]; then
     date +%s >/tmp/ts-login.lock
     rm -f /tmp/ts.ignore-auth
+    rm -f /tmp/ts-readvertise.last
     ADVERTISE=""
     if [ -s /etc/tailscale/lan-cidr ]; then
         ADVERTISE="--advertise-routes=$(head -n 1 /etc/tailscale/lan-cidr)"

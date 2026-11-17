@@ -422,6 +422,8 @@ case "$OP" in
                 --hostname=mt76x8 --reset </dev/null >/tmp/ts_login.log 2>&1
             rm -f /tmp/ts-login.lock
         ) &
+        # 登录成功后让开机循环尽快重试广播，不要卡在失败退避里。
+        rm -f /tmp/ts-readvertise.last
         ok "已经开始登录，授权链接生成后会在页面上自动出现（约 10~40 秒）"
         ;;
 
