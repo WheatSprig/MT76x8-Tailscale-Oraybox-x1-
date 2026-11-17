@@ -59,3 +59,23 @@ netstat -ltn | grep 9100    # 没有就是 p910nd 没起来
 `/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale` 一起保留，所以正常
 sysupgrade 不需要重新授权。用 Breed 刷（会清空配置）或手动 `factoryreset`
 之后才需要重新登录。
+
+## 刷机失败 / 变砖怎么办
+
+- **Breed 不会被刷掉**：它在 u-boot 分区（`0x0 ~ 0x30000`），sysupgrade 只写
+  firmware 分区（`0x50000 ~ 0xFE0000`）。写入过程中断电最多是"没有可启动
+  固件"，Breed 仍在。
+- 恢复步骤：断开办公室网线 → 断电 → 按住 Reset 上电 → 电脑直连 →
+  浏览器开 `192.168.1.1` → 固件更新 → 选 sysupgrade.bin。
+- 极少数情况 Breed 也进不去：需要 USB-TTL 接板上的 `ttyS0`（115200），
+  在 u-boot 里重新刷 Breed。
+- 所以升级前只需要保证一件事：**供电稳定**。不要用会掉电的插排或劣质线。
+
+## 版本号显示 `x.y.z-ERR-BuildInfo`
+
+Tailscale 的版本戳没有注入时，`tailscaled` 会退回
+`<VERSION.txt>-ERR-BuildInfo`。这只影响显示，不影响功能。构建流程现在会注入
+`x.y.z-t<commit>`（见 `.github/workflows/build-firmware.yml` 的 `-ldflags`），
+并在构建后用 `grep -a` 校验。
+
+如果设备上仍然显示这个后缀，说明刷的是修复前的镜像。
