@@ -173,6 +173,25 @@ config p910nd 'printer'
 lpadmin -p office -E -v socket://<设备 IP>:9100 -m everywhere
 ```
 
+### RAW 9100 到底是谁的能力
+
+- **打印机不认识 9100**。USB 打印机没有网络协议栈，它只会通过 USB 收字节。
+- **9100 端口是路由器上的 `p910nd` 提供的**：它监听 TCP 9100，把收到的字节
+  原样写进 `/dev/usb/lp0`。
+- **RAW 是客户端发送方式**：Windows 的「Standard TCP/IP Port」里可以选择
+  `Raw` 或 `LPR`。选 `Raw` + 9100 就是「把驱动输出的字节直接塞进 TCP 连接」，
+  不加任何 LPR 控制字符。`p910nd` 只支持 RAW，不支持 LPR（515）。
+- Windows 10/11 **原生支持**这种端口，不需要装任何第三方软件，也不用在
+  打印机上做任何设置。PowerShell 一行就能建：
+
+  ```powershell
+  Add-PrinterPort -Name "IP_<设备 IP>" -PrinterHostAddress "<设备 IP>" -PortNumber 9100
+  ```
+
+  注意：HP 某些驱动自带「HP Standard TCP/IP Port」端口监视器，会做 SNMP
+  状态查询或双向握手，这类端口在 9100 上容易报「打印机无响应」；改用
+  Microsoft 自带的 Standard TCP/IP Port 即可。
+
 **验证**：
 
 ```sh
@@ -384,9 +403,19 @@ reload_config
 - 启用 / 停用 / 重启打印服务，修改设备路径和端口；
 - 重启设备。
 
-> 控制台走的是局域网 + Tailnet，没有额外密码。不要在不可信的网络上暴露
-> 80/8080 端口；如果办公室网络不放心，可以用 `tailscale serve` 只暴露给
-> Tailnet，并把 uhttpd 的 8080 监听删掉。
+> 控制台走的是局域网 + Tailnet，默认没有密码。办公室网络不放心时可以加一层
+> Basic Auth（uhttpd 原生支持，不额外占空间）：
+>
+> ```sh
+> uci add uhttpd httpauth
+> uci set uhttpd.@httpauth[-1].prefix='/'
+> uci set uhttpd.@httpauth[-1].username='admin'
+> uci set uhttpd.@httpauth[-1].password='换成你的密码'
+> uci commit uhttpd
+> /etc/init.d/uhttpd restart
+> ```
+>
+> 加完后 `tailscale serve` 访问也会要求同样的账号密码。
 
 ## LED、Reset 按键与 Breed
 

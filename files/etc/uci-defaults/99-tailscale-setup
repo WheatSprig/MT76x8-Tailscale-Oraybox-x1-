@@ -102,7 +102,8 @@ if [ -f /etc/config/uhttpd ]; then
     uci -q delete uhttpd.main.listen_https
     uci -q set uhttpd.main.home='/www'
     uci -q set uhttpd.main.cgi_prefix='/cgi-bin'
-    uci -q set uhttpd.main.index_page='index.html'
+    # 不列目录（uhttpd 默认就按 index.html 作为首页）。
+    uci -q set uhttpd.main.no_dirlists='1'
     uci -q commit uhttpd
     /etc/init.d/uhttpd enable
     /etc/init.d/uhttpd restart >/dev/null 2>&1
