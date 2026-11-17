@@ -429,28 +429,50 @@ if [ "$OP" = "wifi" ]; then
     HAS_KEY=0
     [ -n "$(uci -q get wireless.default_radio0.key 2>/dev/null)" ] && HAS_KEY=1
 
-    WDEV=$(ubus call network.interface.wwan status 2>/dev/null \
-        | tr -d ' \t\n' | sed -n 's/.*"l3_device":"\([^"]*\)".*/\1/p')
-    [ -n "$WDEV" ] || WDEV=phy0-sta0
-
+    WDEV=""
     SSID_NOW=""
     SIGNAL=""
-    if [ "$RADIO_DIS" != "1" ]; then
-        _info=$(iwinfo "$WDEV" info 2>/dev/null)
-        SSID_NOW=$(printf '%s' "$_info" | sed -n 's/.*ESSID:[[:space:]]*"\(.*\)".*/\1/p' | head -n 1)
-        SIGNAL=$(printf '%s' "$_info" | sed -n 's/^[[:space:]]*Signal:[[:space:]]*\(.*\)$/\1/p' | head -n 1)
-        [ -n "$SIGNAL" ] || SIGNAL=$(printf '%s' "$_info" | sed -n 's/.*Signal:[[:space:]]*\([-0-9]* dBm\).*/\1/p' | head -n 1)
-    fi
-    WIP=$(ip -4 addr show dev "$WDEV" 2>/dev/null \
-        | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
+    WIP=""
+    CLIENTS=0
 
     MODE=off
     if [ "$RADIO_DIS" != "1" ]; then
         case "${IF_MODE:-ap}" in
             sta) MODE=client ;;
+            ap) MODE=ap ;;
             *) MODE=${IF_MODE:-ap} ;;
         esac
     fi
+
+    ALLDEV=$(iw dev 2>/dev/null | sed -n 's/.*Interface \(phy[0-9]*-[a-z0-9]*\).*/\1/p')
+
+    if [ "$MODE" = "client" ]; then
+        WDEV=$(ubus call network.interface.wwan status 2>/dev/null \
+            | tr -d ' \t\n' | sed -n 's/.*"l3_device":"\([^"]*\)".*/\1/p')
+        [ -n "$WDEV" ] || WDEV=$(printf '%s\n' "$ALLDEV" | grep -m 1 'sta')
+        [ -n "$WDEV" ] || WDEV=phy0-sta0
+    else
+        WDEV=$(printf '%s\n' "$ALLDEV" | grep -m 1 'ap')
+        [ -n "$WDEV" ] || WDEV=phy0-ap0
+    fi
+
+    if [ "$RADIO_DIS" != "1" ]; then
+        _info=$(iwinfo "$WDEV" info 2>/dev/null)
+        SSID_NOW=$(printf '%s' "$_info" | sed -n 's/.*ESSID:[[:space:]]*"\(.*\)".*/\1/p' | head -n 1)
+        SIGNAL=$(printf '%s' "$_info" | sed -n 's/^[[:space:]]*Signal:[[:space:]]*\(.*\)$/\1/p' | head -n 1)
+        [ -n "$SIGNAL" ] || SIGNAL=$(printf '%s' "$_info" | sed -n 's/.*Signal:[[:space:]]*\([-0-9]* dBm\).*/\1/p' | head -n 1)
+        CLIENTS=$(iw dev "$WDEV" station dump 2>/dev/null | grep -c '^Station')
+    fi
+
+    # AP 模式没有“关联”这一步，只要 radio 起来就算在跑
+    if [ "$MODE" = "ap" ]; then
+        SSID_NOW=$CFG_SSID
+        SIGNAL=""
+        WIP=""
+    fi
+
+    WIP=$(ip -4 addr show dev "$WDEV" 2>/dev/null \
+        | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
 
     EXIT_DEV=$(ip route show default 2>/dev/null \
         | sed -n 's/^default via [0-9.]* dev \([^ ]*\).*/\1/p' | head -n 1)
@@ -468,6 +490,7 @@ if [ "$OP" = "wifi" ]; then
   "signal": "$(json_escape "$SIGNAL")",
   "ip": "$(json_escape "$WIP")",
   "iface": "$(json_escape "$WDEV")",
+  "clients": $CLIENTS,
   "exit_dev": "$(json_escape "$EXIT_DEV")"
 }
 EOF
@@ -886,13 +909,15 @@ case "$OP" in
         case "$(param action)" in
             on)
                 : > /etc/lan-rescue
+                rm -f /etc/lan-rescue.off
                 ip addr add 192.168.1.2/24 brd + dev br-lan 2>/dev/null
                 ok "救援地址已启用：192.168.1.2/24（直连的电脑需要手动配 192.168.1.x）"
                 ;;
             off)
                 rm -f /etc/lan-rescue
+                : > /etc/lan-rescue.off
                 ip addr del 192.168.1.2/24 dev br-lan 2>/dev/null
-                ok "救援地址已关闭"
+                ok "救援地址已关闭（如果以后网络不通，只能有线直连并手动配地址）"
                 ;;
             *)
                 fail "action 只能是 on 或 off"
@@ -903,8 +928,8 @@ case "$OP" in
     wifi_apply)
         MODE=$(param mode)
         case "$MODE" in
-            client|off) ;;
-            *) fail "模式只能是 client 或 off" ;;
+            client|ap|off) ;;
+            *) fail "模式只能是 client、ap 或 off" ;;
         esac
 
         if [ "$MODE" = "off" ]; then
@@ -924,9 +949,16 @@ case "$OP" in
         fi
 
         uci -q set wireless.radio0.disabled='0'
-        uci -q set wireless.default_radio0.mode='sta'
         uci -q set wireless.default_radio0.ssid="$SSID"
-        uci -q set wireless.default_radio0.network='wwan'
+        if [ "$MODE" = "ap" ]; then
+            # AP 可以桥进 br-lan：客户端的地址由主路由发
+            uci -q set wireless.default_radio0.mode='ap'
+            uci -q set wireless.default_radio0.network='lan'
+            uci -q delete wireless.default_radio0.disabled
+        else
+            uci -q set wireless.default_radio0.mode='sta'
+            uci -q set wireless.default_radio0.network='wwan'
+        fi
         if [ -n "$KEY" ]; then
             uci -q set wireless.default_radio0.encryption='psk2'
             uci -q set wireless.default_radio0.key="$KEY"
@@ -936,20 +968,25 @@ case "$OP" in
         fi
         uci -q commit wireless
 
-        # 独立接口，不桥进 br-lan（STA 不允许桥接）
-        uci -q set network.wwan=interface
-        uci -q set network.wwan.proto='dhcp'
-        uci -q set network.wwan.metric='20'
-        uci -q commit network
+        if [ "$MODE" = "client" ]; then
+            # 独立接口，不桥进 br-lan（STA 不允许桥接）
+            uci -q set network.wwan=interface
+            uci -q set network.wwan.proto='dhcp'
+            uci -q set network.wwan.metric='20'
+            uci -q commit network
+            /etc/init.d/net-failover enable >/dev/null 2>&1
+            /etc/init.d/net-failover start >/dev/null 2>&1
+        fi
 
         /etc/init.d/wpad enable >/dev/null 2>&1
         /etc/init.d/wpad start >/dev/null 2>&1
-        /etc/init.d/net-failover enable >/dev/null 2>&1
-        /etc/init.d/net-failover start >/dev/null 2>&1
 
         # wifi reload 有时不会把停着的 radio 拉起来，补一次 wifi up
         ( wifi reload >/tmp/wifi-apply.log 2>&1; sleep 1; wifi up >>/tmp/wifi-apply.log 2>&1 ) &
 
+        if [ "$MODE" = "ap" ]; then
+            ok "热点已保存并开启：$SSID（客户端地址由主路由分配，切换后 WiFi 容灾链路会暂时没有）"
+        fi
         ok "已保存，正在连接 $SSID（约 10~30 秒，不影响有线）"
         ;;
 

@@ -147,6 +147,24 @@
   .switch input:checked + .slider { background: var(--accent); }
   .switch input:checked + .slider::before { transform: translateX(18px); }
 
+  /* 模式选择卡片（无线：关闭 / 客户端 / 接入点） */
+  .modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+  .mode { position: relative; display: block; cursor: pointer; }
+  .mode input { position: absolute; opacity: 0; pointer-events: none; }
+  .mode-body {
+    display: block; height: 100%; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+    transition: border-color .15s, background .15s, box-shadow .15s;
+  }
+  .mode-body b { display: block; font-size: 13.5px; }
+  .mode-body small { display: block; margin-top: 3px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+  .mode input:checked + .mode-body {
+    border-color: var(--accent); background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .mode input:focus-visible + .mode-body { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
+  @media (max-width: 560px) { .modes { grid-template-columns: 1fr; } }
+
   /* ---------------- 控件 ---------------- */
   .btn {
     display: inline-flex; align-items: center; justify-content: center;
@@ -409,10 +427,11 @@
           </label>
         </div>
         <p class="hint">
-          忘了设备地址、或者静态地址配错网段时用：笔记本直连设备、手动配
-          <span class="mono">192.168.1.x</span>，打开
-          <span class="mono">http://192.168.1.2:8080/</span>。
-          只加地址，<b>不会启动 DHCP 服务</b>，不会和办公室主路由抢地址。
+          <b>默认开启</b>。网络配错时网页本身也进不去，所以这个地址是常驻的：
+          笔记本直连设备、手动配 <span class="mono">192.168.1.x</span>，打开
+          <span class="mono">http://192.168.1.2:8080/</span> 就能进来。
+          只加地址、不发 DHCP；如果所在网络本身用 <span class="mono">192.168.1.0/24</span>，
+          把它关掉以免网段冲突。
         </p>
       </div>
       <div class="card" style="margin-top:14px">
@@ -422,29 +441,40 @@
         <div class="row"><span class="k">信号</span><span class="v mono" id="wifi-signal">—</span></div>
         <div class="row"><span class="k">WiFi 地址</span><span class="v mono" id="wifi-ip">—</span></div>
         <div class="row"><span class="k">当前出口</span><span class="v mono" id="wifi-exit">—</span></div>
-        <div class="field">
-          <select id="wifi-mode">
-            <option value="off">关闭</option>
-            <option value="client">客户端（连办公室 AP，做容灾）</option>
-          </select>
+        <div class="modes" id="wifi-modes">
+          <label class="mode">
+            <input type="radio" name="wifi-mode" value="off">
+            <span class="mode-body"><b>关闭</b><small>只走网线</small></span>
+          </label>
+          <label class="mode">
+            <input type="radio" name="wifi-mode" value="client">
+            <span class="mode-body"><b>客户端</b><small>连上游 AP，做容灾备份</small></span>
+          </label>
+          <label class="mode">
+            <input type="radio" name="wifi-mode" value="ap">
+            <span class="mode-body"><b>接入点</b><small>把 LAN 变成无线热点</small></span>
+          </label>
         </div>
-        <div id="wifi-client" class="hide">
+        <div id="wifi-fields" class="hide">
           <div class="field">
             <input id="wifi-ssid-input" placeholder="SSID" autocomplete="off">
             <button class="btn ghost small" id="btn-wifi-scan">扫描</button>
           </div>
           <div id="wifi-scan-list"></div>
           <div class="field">
-            <input id="wifi-key-input" type="password" placeholder="密码（留空 = 开放网络）"
+            <input id="wifi-key-input" type="password" placeholder="密码（至少 8 位，留空 = 开放）"
                    autocomplete="new-password">
           </div>
+          <p class="hint hide" id="wifi-ap-warn">
+            切到接入点后，WiFi 容灾链路会断开（只剩有线）；连上热点的设备地址由主路由分配。
+          </p>
         </div>
         <div class="actions">
-          <button class="btn small" id="btn-wifi-apply">保存并连接</button>
+          <button class="btn small" id="btn-wifi-apply">保存并应用</button>
         </div>
         <p class="hint">
-          只影响 WiFi 备用链路，不会断开有线；密码只保存在设备上，不回显。
-          有线网关连续不通时，默认路由会自动切到这条链路。
+          无线改动不会影响有线；密码只保存在设备上，不回显。
+          客户端模式下，有线网关连续不通时默认路由会自动切到 WiFi。
         </p>
       </div>
     </section>
@@ -1132,6 +1162,26 @@
   }
 
   // ---------------- 无线（容灾链路） ----------------
+  function wifiMode() {
+    var el = document.querySelector('input[name="wifi-mode"]:checked');
+    return el ? el.value : 'off';
+  }
+
+  function paintWifiMode() {
+    var m = wifiMode();
+    $('wifi-fields').classList.toggle('hide', m === 'off');
+    $('btn-wifi-scan').classList.toggle('hide', m !== 'client');
+    $('wifi-ap-warn').classList.toggle('hide', m !== 'ap');
+    $('wifi-ssid-input').placeholder = m === 'ap' ? '热点名称' : 'SSID';
+  }
+
+  function setWifiMode(m) {
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="wifi-mode"]'), function (r) {
+      r.checked = (r.value === m);
+    });
+    paintWifiMode();
+  }
+
   function loadWifi() {
     if (!state.authed) return;
     getJSON('/cgi-bin/api.sh?op=wifi').then(renderWifi).catch(function () {});
@@ -1140,18 +1190,17 @@
   function renderWifi(j) {
     state.wifi = j;
     var st = j.mode === 'off' ? ['已关闭', 'warn']
-      : (j.connected ? ['已连接', 'ok'] : ['连接中…', 'warn']);
+      : (j.connected ? (j.mode === 'ap' ? ['热点已开启', 'ok'] : ['已连接', 'ok'])
+                     : ['连接中…', 'warn']);
     setText('wifi-state', st[0], st[1]);
     setText('wifi-ssid', j.ssid || '—');
-    setText('wifi-signal', j.signal || '—');
+    setText('wifi-signal', j.mode === 'ap' ? (j.clients || 0) + ' 个客户端' : (j.signal || '—'));
     setText('wifi-ip', j.ip || '—');
     var exit = j.exit_dev === 'br-lan' ? '有线'
       : (j.exit_dev ? '无线（' + j.exit_dev + '）' : '—');
     setText('wifi-exit', exit);
 
-    var sel = $('wifi-mode');
-    if (document.activeElement !== sel) sel.value = j.mode === 'off' ? 'off' : 'client';
-    $('wifi-client').classList.toggle('hide', sel.value !== 'client');
+    setWifiMode(j.mode === 'off' ? 'off' : (j.mode === 'ap' ? 'ap' : 'client'));
     var inp = $('wifi-ssid-input');
     if (document.activeElement !== inp && !inp.value && j.cfg_ssid) inp.value = j.cfg_ssid;
   }
@@ -1197,13 +1246,14 @@
   }
 
   function applyWifi() {
-    var mode = $('wifi-mode').value;
+    var mode = wifiMode();
     var body = { mode: mode };
-    if (mode === 'client') {
+    if (mode !== 'off') {
       body.ssid = $('wifi-ssid-input').value.trim();
       body.key = $('wifi-key-input').value;
-      if (!body.ssid) { toast('请填写 SSID'); return; }
+      if (!body.ssid) { toast(mode === 'ap' ? '请填写热点名称' : '请填写 SSID'); return; }
       if (body.key && body.key.length < 8) { toast('密码至少 8 位'); return; }
+      if (mode === 'ap' && !body.key) { toast('接入点建议设置密码'); return; }
     }
     var btn = $('btn-wifi-apply');
     btn.disabled = true;
@@ -1213,7 +1263,7 @@
       if (!j.ok) return;
       $('wifi-key-input').value = '';
       setText('wifi-state', '连接中…', 'warn');
-      if (mode === 'client') pollWifi(0); else loadWifi();
+      if (mode === 'off') loadWifi(); else pollWifi(0);
     }).catch(function () { toast('请求失败'); btn.disabled = false; });
   }
 
@@ -1354,8 +1404,8 @@
   $('btn-lan-confirm').addEventListener('click', confirmLan);
   $('lan-rescue').addEventListener('change', function () { toggleRescue(this.checked); });
 
-  $('wifi-mode').addEventListener('change', function () {
-    $('wifi-client').classList.toggle('hide', this.value !== 'client');
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="wifi-mode"]'), function (r) {
+    r.addEventListener('change', paintWifiMode);
   });
   $('btn-wifi-scan').addEventListener('click', scanWifi);
   $('btn-wifi-apply').addEventListener('click', applyWifi);

@@ -101,6 +101,15 @@ if [ -f /etc/config/wireless ]; then
     fi
 fi
 
+# ---------- 2.6 救援地址默认开启 ----------
+# 网络配错时，网页上的开关是打不开的（那时已经进不去控制台），所以默认就把
+# 192.168.1.2/24 加上：笔记本直连设备、手动配 192.168.1.x 就能进。
+# 如果所在网络本身用 192.168.1.0/24，在「网络 → 救援地址」里关掉即可；
+# 关掉会留下 /etc/lan-rescue.off，升级不会再打开。
+if [ ! -f /etc/lan-rescue ] && [ ! -f /etc/lan-rescue.off ]; then
+    : > /etc/lan-rescue
+fi
+
 # ---------- 3. USB 打印机 -> TCP 9100 ----------
 # 板载 USB-A 口在 DTS 里默认启用（ehci/ohci/usbphy 未禁用），
 # kmod-usb-printer 提供 /dev/usb/lp0，p910nd 把它映射到 9100 端口。
