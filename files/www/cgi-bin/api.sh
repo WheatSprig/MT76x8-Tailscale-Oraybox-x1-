@@ -358,6 +358,69 @@ EOF
     exit 0
 fi
 
+if [ "$OP" = "lan" ]; then
+    auth_ok || fail "请先登录"
+    LAN_PROTO=$(uci -q get network.lan.proto)
+    [ -n "$LAN_PROTO" ] || LAN_PROTO=dhcp
+
+    CUR=$(ip -4 addr show dev br-lan 2>/dev/null \
+        | sed -n 's/.*inet \([0-9.]*\)\/\([0-9]*\).*/\1 \2/p' | head -n 1)
+    CUR_IP=${CUR% *}
+    CUR_PFX=${CUR#* }
+    [ -n "$CUR_IP" ] || CUR_PFX=24
+
+    CUR_GW=$(ip -4 route show default 2>/dev/null \
+        | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1)
+    CUR_DNS=$(awk '/^nameserver/ {printf "%s ", $2}' /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null)
+    [ -n "$CUR_DNS" ] || CUR_DNS=$(awk '/^nameserver/ {printf "%s ", $2}' /etc/resolv.conf 2>/dev/null)
+
+    # 当前 lan 接口跑了多久（DHCP 租约看个大概）
+    UPTIME_LAN=$(ubus call network.interface.lan status 2>/dev/null \
+        | tr -d ' \t\n' | sed -n 's/.*"uptime":\([0-9]*\).*/\1/p')
+    [ -n "$UPTIME_LAN" ] || UPTIME_LAN=0
+
+    DBG_IP=$(uci -q get network.lan.ipaddr)
+    DBG_GW=$(uci -q get network.lan.gateway)
+    DBG_DNS=$(uci -q get network.lan.dns)
+    DBG_MASK=$(uci -q get network.lan.netmask)
+
+    RESCUE=0
+    [ -f /etc/lan-rescue ] && RESCUE=1
+
+    PENDING=0
+    PENDING_LEFT=0
+    if [ -f /etc/lan-pending ]; then
+        PENDING=1
+        _ts=$(sed -n '2p' /etc/lan-pending 2>/dev/null)
+        case "$_ts" in ''|*[!0-9]*) _ts=0 ;; esac
+        PENDING_LEFT=$(( 180 - ($(date +%s) - _ts) ))
+        [ "$PENDING_LEFT" -lt 0 ] && PENDING_LEFT=0
+    fi
+
+    json_header
+    printf '\r\n'
+    cat <<EOF
+{
+  "ok": true,
+  "proto": "$(json_escape "$LAN_PROTO")",
+  "ip": "$(json_escape "$CUR_IP")",
+  "prefix": "$(json_escape "$CUR_PFX")",
+  "gateway": "$(json_escape "$CUR_GW")",
+  "dns": "$(json_escape "$CUR_DNS")",
+  "uptime": "$(json_escape "$UPTIME_LAN")",
+  "cfg_ip": "$(json_escape "$DBG_IP")",
+  "cfg_gateway": "$(json_escape "$DBG_GW")",
+  "cfg_dns": "$(json_escape "$DBG_DNS")",
+  "cfg_netmask": "$(json_escape "$DBG_MASK")",
+  "rescue": $RESCUE,
+  "pending": $PENDING,
+  "pending_left": $PENDING_LEFT,
+  "hostname": "$(json_escape "$(uci -q get system.@system[0].hostname)")"
+}
+EOF
+    exit 0
+fi
+
 if [ "$OP" = "logs" ] || [ "$OP" = "diag" ]; then
     auth_ok || fail "请先登录"
     text_header
@@ -618,6 +681,106 @@ case "$OP" in
         esac
         ;;
 
+
+    lan_apply)
+        MODE=$(param mode)
+        case "$MODE" in
+            dhcp|static) ;;
+            *) fail "模式只能是 dhcp 或 static" ;;
+        esac
+
+        IP=""
+        NETMASK=""
+        GW=""
+        DNS=""
+        if [ "$MODE" = "static" ]; then
+            IP=$(param ip | tr -d ' ')
+            PREFIX=$(param prefix | tr -d ' ')
+            GW=$(param gateway | tr -d ' ')
+            DNS=$(param dns | tr -d ' ')
+
+            case "$IP" in
+                ''|*[!0-9.]*) fail "IP 地址格式不正确" ;;
+            esac
+            case "$PREFIX" in
+                ''|*[!0-9]*) fail "前缀长度只能是数字（例如 24）" ;;
+            esac
+            [ "$PREFIX" -ge 1 ] 2>/dev/null && [ "$PREFIX" -le 32 ] 2>/dev/null \
+                || fail "前缀应在 1~32 之间"
+
+            eval "$(/bin/ipcalc.sh "$IP" "$PREFIX" 2>/dev/null | grep -E '^(NETWORK|NETMASK)=')"
+            [ -n "$NETWORK" ] && [ -n "$NETMASK" ] || fail "IP / 前缀不合法"
+            [ -n "$GW" ] || fail "静态模式需要填网关"
+
+            case "$GW" in
+                *[!0-9.]*) fail "网关格式不正确" ;;
+            esac
+        fi
+
+        # 先备份，再写候选配置；配置本身不会被 reload 之外的任何东西立即应用。
+        cp /etc/config/network /etc/config/network.bak 2>/dev/null
+
+        uci -q set network.lan.proto="$MODE"
+        if [ "$MODE" = "static" ]; then
+            uci -q set network.lan.ipaddr="$IP"
+            uci -q set network.lan.netmask="$NETMASK"
+            uci -q set network.lan.gateway="$GW"
+            if [ -n "$DNS" ]; then
+                uci -q set network.lan.dns="$DNS"
+            else
+                uci -q delete network.lan.dns
+            fi
+        else
+            uci -q delete network.lan.ipaddr
+            uci -q delete network.lan.netmask
+            uci -q delete network.lan.gateway
+            uci -q delete network.lan.dns
+            SYS_NAME=$(uci -q get system.@system[0].hostname)
+            [ -n "$SYS_NAME" ] && uci -q set network.lan.hostname="$SYS_NAME"
+        fi
+        uci -q commit network
+
+        TOKEN=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-12)
+        [ -n "$TOKEN" ] || TOKEN=$(date +%s)
+        printf '%s\n%s\n' "$TOKEN" "$(date +%s)" > /etc/lan-pending
+
+        # 180 秒内没确认就回滚；进程放到后台，CGI 先返回。
+        ( /usr/lib/lan-rollback.sh guarded "$TOKEN" >/dev/null 2>&1 & )
+
+        # 延迟 2 秒再 reload：先让这次 HTTP 响应发出去，否则切网段时页面收不到结果。
+        ( sleep 2; /etc/init.d/network reload >/tmp/lan-reload.log 2>&1 ) &
+
+        if [ "$MODE" = "static" ]; then
+            ok "已应用静态地址 $IP/$PREFIX。3 分钟内没有点「确认无误」会自动回滚；请用新地址打开控制台"
+        fi
+        ok "已切回 DHCP。3 分钟内没有点「确认无误」会自动回滚；地址可能变化"
+        ;;
+
+    lan_confirm)
+        if [ -f /etc/lan-pending ]; then
+            rm -f /etc/lan-pending
+            ok "已确认，当前地址配置会保留"
+        fi
+        ok "没有待确认的地址改动"
+        ;;
+
+    rescue_ip)
+        case "$(param action)" in
+            on)
+                : > /etc/lan-rescue
+                ip addr add 192.168.1.2/24 brd + dev br-lan 2>/dev/null
+                ok "救援地址已启用：192.168.1.2/24（直连的电脑需要手动配 192.168.1.x）"
+                ;;
+            off)
+                rm -f /etc/lan-rescue
+                ip addr del 192.168.1.2/24 dev br-lan 2>/dev/null
+                ok "救援地址已关闭"
+                ;;
+            *)
+                fail "action 只能是 on 或 off"
+                ;;
+        esac
+        ;;
 
     printer_toggle)
         uci -q set p910nd.printer=p910nd

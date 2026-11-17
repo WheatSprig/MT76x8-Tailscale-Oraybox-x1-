@@ -1,0 +1,8 @@
+#!/bin/sh
+# network reload 会清掉手工加的救援地址，br-lan 每次 up 时补回来。
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "lan" ] || exit 0
+[ -f /etc/lan-rescue ] || exit 0
+
+ip addr add 192.168.1.2/24 brd + dev br-lan 2>/dev/null
+exit 0

@@ -68,6 +68,8 @@ if [ ! -f /etc/tailscale/routes ]; then
     : > /etc/tailscale/lan-auto
 fi
 [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
+# 开机兜底：回滚未确认的 LAN 改动 + 补加救援地址。
+[ -x /etc/init.d/lan-guard ] && /etc/init.d/lan-guard enable
 
 # ---------- 2.5 关闭 WiFi ----------
 # 这台设备是网线接入的打印/路由盒子，AP 用不上；hostapd + wpa_supplicant

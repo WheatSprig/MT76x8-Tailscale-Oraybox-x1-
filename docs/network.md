@@ -31,8 +31,9 @@ OrayBox X1（Tailscale 子网路由 + 打印服务，地址由 DHCP 下发）
 列表里找主机名 **`mt76x8`**。设备启动后也可以看状态灯（固件默认把灯全关了，
 所以看不到灯，这是预期行为）。
 
-需要固定地址时（例如主路由不给 DHCP 保留），构建时把 `lan_mode` 改成
-`static`，并填好 `lan_ip` / `lan_gateway`；或者刷机后手动改：
+需要固定地址时（例如主路由不给 DHCP 保留），可以直接在控制台「网络 → 局域网」
+里切到静态，或者构建时把 `lan_mode` 改成 `static` 并填好 `lan_ip` /
+`lan_gateway`；也可以 SSH 手动改：
 
 ```sh
 uci set network.lan.proto='static'
@@ -42,6 +43,28 @@ uci set network.lan.dns='192.168.1.1'
 uci commit network
 reload_config
 ```
+
+### 在控制台里改地址（带自动回滚）
+
+「网络 → 局域网」可以切 DHCP / 静态。因为设备在办公室、改错就联系不上，
+应用走的是两阶段确认：
+
+1. 保存后立刻生效，页面显示「180 秒内点确认无误，否则自动回滚」；
+2. 回滚靠 `/etc/lan-pending` + `/usr/lib/lan-rollback.sh`：超时、或者应用后
+   直接断电重启（`/etc/init.d/lan-guard` 在开机时检查），都会恢复
+   `/etc/config/network.bak` 并 reload；
+3. 点「确认无误」后删除 pending，配置才会真正留下；
+4. Tailscale 会跟着短暂断开（br-lan 重建时默认路由也没了），这是预期。
+
+### 救援地址 192.168.1.2
+
+「网络 → 救援地址」开关会在 `br-lan` 上额外加 `192.168.1.2/24`（默认关闭）。
+忘了设备地址、或者静态地址配错网段时：笔记本直连设备、手动配 `192.168.1.x`，
+打开 `http://192.168.1.2:8080/` 即可。
+
+它**只加地址，不启动 DHCP 服务**，不会和办公室主路由抢地址；`network reload`
+会清掉手工地址，所以 `/etc/hotplug.d/iface/90-rescue-ip` 会在 br-lan 每次 up
+时补回来，`/etc/init.d/lan-guard` 负责开机时补加。
 
 子网路由要发布的网段由 `rc.local` 从 `br-lan` 的实际地址算出（`ipcalc.sh` 折算
 成网络地址），DHCP 换地址后会自动跟着更新，不需要手工维护路由表。

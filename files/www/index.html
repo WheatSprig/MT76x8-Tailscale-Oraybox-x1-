@@ -172,6 +172,13 @@
     background: var(--panel-2); color: var(--text);
   }
   input:focus { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
+  select {
+    flex: 1 1 auto; min-width: 0; padding: 9px 12px;
+    border: 1px solid var(--line); border-radius: 9px;
+    background: var(--panel-2); color: var(--text);
+    font-family: inherit; font-size: 14px;
+  }
+  select:focus { outline: 2px solid rgba(59,130,246,.5); outline-offset: 1px; }
   .hint { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 
   /* ---------------- 登录 / 授权等待 ---------------- */
@@ -343,6 +350,7 @@
 
     <!-- 网络 -->
     <section class="page hide" id="page-network">
+      <div class="banner hide" id="lan-pending-banner"></div>
       <div class="grid c2" style="margin-top:16px">
         <div class="card">
           <h2>局域网</h2>
@@ -351,6 +359,33 @@
           <div class="row"><span class="k">网关</span><span class="v mono" id="net-gw">—</span></div>
           <div class="row"><span class="k">DNS</span><span class="v mono" id="net-dns">—</span></div>
           <div class="row"><span class="k">MAC</span><span class="v mono" id="net-mac">—</span></div>
+          <div class="field">
+            <select id="lan-mode">
+              <option value="dhcp">DHCP（从主路由自动获取）</option>
+              <option value="static">静态地址</option>
+            </select>
+          </div>
+          <div id="lan-static" class="hide">
+            <div class="field">
+              <input id="lan-ip" placeholder="192.168.110.166" inputmode="decimal" autocomplete="off">
+              <input id="lan-prefix" placeholder="24" inputmode="numeric" autocomplete="off"
+                     style="flex:0 0 86px">
+            </div>
+            <div class="field">
+              <input id="lan-gw" placeholder="网关，例如 192.168.110.1" inputmode="decimal" autocomplete="off">
+            </div>
+            <div class="field">
+              <input id="lan-dns" placeholder="DNS（留空 = 同网关）" inputmode="decimal" autocomplete="off">
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn small" id="btn-lan-apply">保存并应用</button>
+            <button class="btn ghost small" id="btn-lan-confirm" disabled>确认无误</button>
+          </div>
+          <p class="hint" id="lan-hint">
+            改地址会短暂断网（Tailscale 也会跟着断，因为没有默认路由）。
+            应用后 3 分钟内点「确认无误」，否则自动回滚到原配置。
+          </p>
         </div>
         <div class="card">
           <h2>Tailscale</h2>
@@ -363,6 +398,22 @@
         <h2>监听端口</h2>
         <pre id="net-ports" style="margin-top:0">读取中…</pre>
         <p class="hint">只露出 80 / 8080（控制台）、22（SSH）、9100（打印）。</p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>救援地址</h2>
+        <div class="row" style="align-items:center">
+          <span class="k">额外加 192.168.1.2/24</span>
+          <label class="switch">
+            <input type="checkbox" id="lan-rescue">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <p class="hint">
+          忘了设备地址、或者静态地址配错网段时用：笔记本直连设备、手动配
+          <span class="mono">192.168.1.x</span>，打开
+          <span class="mono">http://192.168.1.2:8080/</span>。
+          只加地址，<b>不会启动 DHCP 服务</b>，不会和办公室主路由抢地址。
+        </p>
       </div>
     </section>
 
@@ -571,7 +622,8 @@
 <script>
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var state = { data: null, net: null, sys: null, authed: false, page: 'overview', timer: 0 };
+  var state = { data: null, net: null, sys: null, authed: false, page: 'overview', timer: 0,
+                lan: null, lanLeft: 0, lanTick: 0, lanTarget: '', lanOk: '' };
 
   var TITLES = {
     overview: '概览', network: '网络', tailscale: 'Tailscale',
@@ -626,7 +678,7 @@
       a.classList.toggle('active', a.getAttribute('data-page') === page);
     });
     $('page-title').textContent = TITLES[page];
-    if (page === 'network') loadNet();
+    if (page === 'network') { loadNet(); loadLan(); }
     if (page === 'system') loadSys();
   }
 
@@ -893,6 +945,160 @@
     }).catch(function () {});
   }
 
+  // ---------------- 局域网地址（DHCP / 静态） ----------------
+  function maskToPrefix(mask) {
+    if (!mask) return '';
+    var bits = 0;
+    mask.split('.').forEach(function (o) {
+      var n = parseInt(o, 10) || 0;
+      while (n) { bits += n & 1; n >>= 1; }
+    });
+    return bits || '';
+  }
+
+  function loadLan() {
+    if (!state.authed) return;
+    getJSON('/cgi-bin/api.sh?op=lan').then(renderLan).catch(function () {});
+  }
+
+  function renderLan(j) {
+    state.lan = j;
+    var sel = $('lan-mode');
+    if (document.activeElement !== sel) sel.value = j.proto === 'static' ? 'static' : 'dhcp';
+    $('lan-static').classList.toggle('hide', sel.value !== 'static');
+
+    var setIfIdle = function (id, v) {
+      var el = $(id);
+      if (document.activeElement !== el) el.value = v == null ? '' : v;
+    };
+    if (j.proto === 'static') {
+      setIfIdle('lan-ip', j.cfg_ip);
+      setIfIdle('lan-prefix', maskToPrefix(j.cfg_netmask) || j.prefix);
+      setIfIdle('lan-gw', j.cfg_gateway);
+      setIfIdle('lan-dns', j.cfg_dns);
+    } else {
+      setIfIdle('lan-ip', j.ip);
+      setIfIdle('lan-prefix', j.prefix || 24);
+      setIfIdle('lan-gw', j.gateway);
+      setIfIdle('lan-dns', '');
+    }
+    $('lan-rescue').checked = j.rescue === 1;
+
+    if (j.pending) {
+      state.lanLeft = j.pending_left || 1;
+      $('btn-lan-confirm').disabled = false;
+      paintLanBanner();
+      startLanTick();
+    } else if (state.lanLeft <= 0) {
+      $('btn-lan-confirm').disabled = true;
+      paintLanBanner();
+    }
+  }
+
+  function paintLanBanner() {
+    var el = $('lan-pending-banner');
+    if (state.lanLeft <= 0) { el.classList.add('hide'); return; }
+    var extra = '';
+    if (state.lanOk) {
+      extra = ' <a href="http://' + state.lanOk + ':8080/#/network">在新地址打开</a>';
+    } else if (state.lanTarget && state.lanTarget !== location.hostname) {
+      extra = ' 新地址：<b class="mono">' + state.lanTarget + '</b>';
+    }
+    el.className = 'banner';
+    el.innerHTML = '地址配置已应用，<b>' + state.lanLeft + '</b> 秒内点「确认无误」，' +
+      '否则自动回滚。' + extra;
+  }
+
+  function startLanTick() {
+    if (state.lanTick) return;
+    state.lanTick = setInterval(function () {
+      state.lanLeft -= 1;
+      paintLanBanner();
+      if (state.lanLeft <= 0) {
+        stopLanTick();
+        $('btn-lan-confirm').disabled = true;
+        loadLan();
+      }
+    }, 1000);
+  }
+
+  function stopLanTick() {
+    if (state.lanTick) { clearInterval(state.lanTick); state.lanTick = 0; }
+  }
+
+  function probeLan(ip) {
+    if (!/^[0-9.]+$/.test(ip)) return;
+    var tries = 0;
+    var tick = setInterval(function () {
+      tries += 1;
+      fetch('http://' + ip + ':8080/', { mode: 'no-cors', cache: 'no-store' })
+        .then(function () {
+          clearInterval(tick);
+          state.lanOk = ip;
+          paintLanBanner();
+        })
+        .catch(function () { if (tries > 15) clearInterval(tick); });
+    }, 3000);
+  }
+
+  function applyLan() {
+    var mode = $('lan-mode').value;
+    var body = { mode: mode };
+    if (mode === 'static') {
+      body.ip = $('lan-ip').value.trim();
+      body.prefix = $('lan-prefix').value.trim();
+      body.gateway = $('lan-gw').value.trim();
+      body.dns = $('lan-dns').value.trim();
+      if (!body.ip || !body.prefix || !body.gateway) {
+        toast('请填写 IP、前缀和网关');
+        return;
+      }
+    }
+    var msg = mode === 'static'
+      ? '改为静态 ' + body.ip + '/' + body.prefix + '？\n\n网络会重建，Tailscale 也会短暂断开；\n3 分钟内不点「确认无误」会自动回滚。'
+      : '改回 DHCP？\n\n网络会重建，地址可能变化；\n3 分钟内不点「确认无误」会自动回滚。';
+    if (!confirm(msg)) return;
+
+    var btn = $('btn-lan-apply');
+    btn.disabled = true;
+    post('lan_apply', body).then(function (j) {
+      toast(j.msg || (j.ok ? '已应用' : '失败'));
+      btn.disabled = false;
+      if (j.ok) {
+        state.lanTarget = mode === 'static' ? body.ip : '';
+        state.lanOk = '';
+        state.lanLeft = 180;
+        $('btn-lan-confirm').disabled = false;
+        paintLanBanner();
+        startLanTick();
+        if (state.lanTarget && state.lanTarget !== location.hostname) probeLan(state.lanTarget);
+      }
+    }).catch(function () { toast('请求失败'); btn.disabled = false; });
+  }
+
+  function confirmLan() {
+    post('lan_confirm').then(function (j) {
+      toast(j.msg || '已确认');
+      state.lanLeft = 0;
+      state.lanOk = '';
+      stopLanTick();
+      paintLanBanner();
+      $('btn-lan-confirm').disabled = true;
+      loadLan();
+    }).catch(function () { toast('请求失败'); });
+  }
+
+  function toggleRescue(on) {
+    post('rescue_ip', { action: on ? 'on' : 'off' }).then(function (j) {
+      toast(j.msg || (j.ok ? '完成' : '失败'));
+      if (!j.ok) $('lan-rescue').checked = !on;
+      loadLan();
+    }).catch(function () {
+      toast('请求失败');
+      $('lan-rescue').checked = !on;
+    });
+  }
+
   function loadSys() {
     if (!state.authed) return;
     getJSON('/cgi-bin/api.sh?op=system').then(function (j) {
@@ -922,7 +1128,7 @@
       $('ov-state').textContent = '设备离线';
       $('ov-state').className = 'state bad';
     });
-    if (state.page === 'network') loadNet();
+    if (state.page === 'network') { loadNet(); loadLan(); }
     if (state.page === 'system') loadSys();
   }
 
@@ -1022,6 +1228,13 @@
 
   $('btn-add-route').addEventListener('click', function () { addRouteRow(''); });
   $('btn-save-routes').addEventListener('click', saveRoutes);
+
+  $('lan-mode').addEventListener('change', function () {
+    $('lan-static').classList.toggle('hide', this.value !== 'static');
+  });
+  $('btn-lan-apply').addEventListener('click', applyLan);
+  $('btn-lan-confirm').addEventListener('click', confirmLan);
+  $('lan-rescue').addEventListener('change', function () { toggleRescue(this.checked); });
 
   function saveSysHostname() {
     var name = ($('sys-hostname-input').value || '').trim().toLowerCase();

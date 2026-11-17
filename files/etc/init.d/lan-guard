@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+# 开机兜底：
+#   1. 上一次改 LAN 地址后没确认就重启/断电 → 先回滚，再让网络正常起来；
+#   2. 救援地址（192.168.1.2/24）是手工加的地址，network reload 会清掉，
+#      这里在 lan 起来之后补回去。
+#
+# 顺序放在 network（S20）和 tailscale（S95）之间不合适，直接用 95：
+# 此时 br-lan 已经有地址，reload 一次也不会影响 tailscaled 重新连。
+
+START=95
+USE_PROCD=0
+
+start() {
+    /usr/lib/lan-rollback.sh check
+
+    [ -f /etc/lan-rescue ] || return 0
+    ip addr add 192.168.1.2/24 brd + dev br-lan 2>/dev/null
+    return 0
+}
