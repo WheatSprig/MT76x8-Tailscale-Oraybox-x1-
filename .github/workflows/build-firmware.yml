@@ -29,10 +29,36 @@ on:
         default: '192.168.1.1'
         type: string
 
+  # 推送到 main：只构建、留 artifact，不改版本。
+  # 只改文档/配置材料时不触发（固件内容没变）。
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'configs/**'
+      - 'patches/**'
+      - 'dts/**'
+      - '.gitignore'
+      - '.gitattributes'
+
 permissions:
-  contents: read
+  contents: write
+
+# 同一个分支/标签只保留最新一次构建，避免连续推送时排队。
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
+  # workflow_dispatch 有输入时用输入；push / tag 触发时 inputs 为空，走默认值。
+  PROFILE: ${{ github.event.inputs.profile || 'oraybox_x1' }}
+  LAN_MODE: ${{ github.event.inputs.lan_mode || 'auto' }}
+  LAN_IP: ${{ github.event.inputs.lan_ip || '192.168.1.2' }}
+  LAN_GATEWAY: ${{ github.event.inputs.lan_gateway || '192.168.1.1' }}
+
   IB_VERSION: '23.05.4'
   IB_TARGET: 'ramips'
   IB_SUBTARGET: 'mt76x8'
@@ -122,7 +148,7 @@ jobs:
   # 阶段 2：镜像。用 ImageBuilder 打包（不编译内核/工具链）。
   # ======================================================================
   image:
-    name: Build image (${{ inputs.profile }})
+    name: Build image (${{ env.PROFILE }})
     needs: tailscale
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
@@ -159,9 +185,9 @@ jobs:
       - name: Generate LAN defaults
         if: inputs.profile != 'list'
         env:
-          LAN_MODE: ${{ inputs.lan_mode }}
-          LAN_IP: ${{ inputs.lan_ip }}
-          LAN_GATEWAY: ${{ inputs.lan_gateway }}
+          LAN_MODE: ${{ env.LAN_MODE }}
+          LAN_IP: ${{ env.LAN_IP }}
+          LAN_GATEWAY: ${{ env.LAN_GATEWAY }}
         run: |
           set -euo pipefail
 
@@ -209,7 +235,7 @@ jobs:
 
       - name: Download ImageBuilder then list profiles or build image
         env:
-          PROFILE: ${{ inputs.profile }}
+          PROFILE: ${{ env.PROFILE }}
           TS_TAG: ${{ needs.tailscale.outputs.ts_tag }}
         run: |
           set -euo pipefail
@@ -333,7 +359,7 @@ jobs:
             echo "### 构建完成"
             echo "- Tailscale: \`${TS_TAG:-n/a}\`"
             echo "- Profile: \`$PROFILE\`"
-            echo "- LAN 模式: \`${{ inputs.lan_mode }}\`（static 时 \`${{ inputs.lan_ip }}\` / \`${{ inputs.lan_gateway }}\`）"
+            echo "- LAN 模式: \`${{ env.LAN_MODE }}\`（static 时 \`${{ env.LAN_IP }}\` / \`${{ env.LAN_GATEWAY }}\`）"
             echo "- 固件: \`$(basename "$BIN")\`"
             echo "- 大小: $SIZE bytes / 上限 ${MAX_FIRMWARE_BYTES} bytes"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -347,10 +373,27 @@ jobs:
         if: inputs.profile != 'list'
         uses: actions/upload-artifact@v4
         with:
-          name: immortalwrt-mt76x8-${{ inputs.profile }}-${{ github.run_number }}
+          name: immortalwrt-mt76x8-${{ env.PROFILE }}-${{ github.run_number }}
           path: |
             imagebuilder/bin/targets/ramips/mt76x8/*sysupgrade.bin
             imagebuilder/bin/targets/ramips/mt76x8/sha256sums
           if-no-files-found: error
           retention-days: 30
           compression-level: 9
+
+      # 打 v* 标签时同时发布 Release，方便长期保存和直接下载。
+      - name: Attach firmware to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && inputs.profile != 'list'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" \
+              --notes "MT76x8 / OrayBox X1 Tailscale 固件 $TAG"
+          gh release upload "$TAG" \
+            imagebuilder/bin/targets/ramips/mt76x8/*sysupgrade.bin \
+            imagebuilder/bin/targets/ramips/mt76x8/sha256sums \
+            --clobber
+          echo "已发布 Release: $TAG"

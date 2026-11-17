@@ -117,13 +117,14 @@ BusyBox httpd 进程。
 
 ## 已实测的构建结果
 
-用 `profile=oraybox_x1` 跑通的真实构建（`run 44006144529`，切换 mbedTLS + 加 USB 打印）：
+用 `profile=oraybox_x1` 跑通的真实构建（`run 44015933949`，提交 `8f7c59a`）：
 
 | 项目 | 数值 |
 | --- | --- |
-| tailscaled（mipsle softfloat，静态链接） | 21,954,751 字节（20.9 MiB） |
-| `*squashfs-sysupgrade.bin` | **11,862,813 字节（11.31 MiB）** |
-| 15 MiB 分区余量 | 3,865,827 字节（3.69 MiB） |
+| tailscaled（mipsle softfloat，静态链接） | 22,020,287 字节（21.0 MiB） |
+| `*squashfs-sysupgrade.bin` | **11,928,349 字节（11.38 MiB）** |
+| 15 MiB 分区余量 | 3,800,291 字节（3.62 MiB） |
+| sha256 | `c16c170104d22986485a80990d6ec5517aff5a688632011a7da80a4734d5f8d8` |
 | LuCI | 已彻底移除（manifest 校验通过） |
 | OpenSSL | 已彻底移除（切到 mbedTLS，省约 1.5 MiB） |
 | `p910nd` / `kmod-usb-printer` | 均已在 manifest 中 |
@@ -135,12 +136,45 @@ BusyBox httpd 进程。
 | 含 LuCI（run 43999090329） | 13,566,749 字节 | — |
 | 裁掉 LuCI（run 44001845479） | 12,976,925 字节 | −576 KiB |
 | 切 mbedTLS + USB 打印（run 44006144529） | 11,862,813 字节 | −1.09 MiB |
+| 启用 AdvertiseRoutes + 静态地址（run 44008677812） | 11,928,349 字节 | +64 KiB |
+| 控制台 / 状态缓存（run 44015933949） | 11,928,349 字节 | — |
+
+> 镜像大小会稳定在这个值附近：squashfs 按块压缩，几 KB 的脚本改动经常
+> 落在同一批块里，所以不同提交的 sysupgrade.bin 长度可能一模一样，
+> **sha256 才是判断是否同一镜像的依据**。
 
 工作流在打包后还会校验 `build_dir/*/root-ramips` 里的
-`www/index.html`、`www/cgi-bin/ts-login.sh`、`etc/uci-defaults/98-lan-ip`、
-`etc/uci-defaults/99-tailscale-setup`、`usr/sbin/tailscaled` 是否存在、脚本是否
-有执行权限、`tailscale` 软链接是否就位，避免 FILES 覆盖层静默失效；同时检查
-`.manifest`，一旦 `luci-base` 或 `libopenssl3` 被依赖回填就直接构建失败。
+`www/index.html`、`www/cgi-bin/api.sh`、`www/cgi-bin/ts-login.sh`、
+`etc/uci-defaults/96-web-auth`、`97-root-password`、`98-lan-ip`、
+`99-tailscale-setup`、`usr/sbin/tailscaled` 是否存在、脚本是否有执行权限、
+`tailscale` 软链接是否就位，避免 FILES 覆盖层静默失效；同时检查 `.manifest`，
+一旦 `luci-base` 或 `libopenssl3` 被依赖回填就直接构建失败。
+
+## 构建的触发方式
+
+| 方式 | 用途 | 产物 |
+| --- | --- | --- |
+| **push 到 `main`** | 日常提交自动构建 | Actions artifact（保留 30 天） |
+| **打 `v*` 标签** | 发布版本 | artifact + GitHub Release 附件 |
+| **Actions → Run workflow** | 手动指定 profile / 版本 / 网段 | artifact |
+
+```sh
+# 日常：改完直接推，自动出固件
+git push origin main
+
+# 发布：打标签，自动建 Release 并附上 sysupgrade.bin
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+push 触发很便宜（公开仓库不计费），所以不用省。几点注意：
+
+- **只改文档/配置材料不触发**：`**.md`、`docs/`、`configs/`、`patches/`、
+  `dts/` 都在 `paths-ignore` 里，避免改 README 也跑一次 5 分钟构建；
+- **同分支并发只保留最新一次**：`concurrency` 会自动取消被打断的旧构建；
+- **tag 构建一定触发**（path 过滤对 tag 不生效），适合做「可回滚的版本点」；
+- push/tag 触发时没有手动输入，默认 `profile=oraybox_x1`、`lan_mode=auto`；
+  要固定地址或指定 Tailscale 版本，仍然用 Run workflow。
 
 ## USB 打印共享
 
