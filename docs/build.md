@@ -75,14 +75,14 @@ BusyBox httpd 进程。
 
 ## 已实测的构建结果
 
-用 `profile=oraybox_x1` 跑通的真实构建（`run 44015933949`，提交 `8f7c59a`）：
+用 `profile=oraybox_x1` 跑通的真实构建（`run 44021981936`，分支
+`feat/console-redesign`，Tailscale `1.104.7-tcbc74fe48e`）：
 
 | 项目 | 数值 |
 | --- | --- |
-| tailscaled（mipsle softfloat，静态链接） | 22,020,287 字节（21.0 MiB） |
-| `*squashfs-sysupgrade.bin` | **11,928,349 字节（11.38 MiB）** |
-| 15 MiB 分区余量 | 3,800,291 字节（3.62 MiB） |
-| sha256 | `c16c170104d22986485a80990d6ec5517aff5a688632011a7da80a4734d5f8d8` |
+| tailscaled（mipsle softfloat，静态链接，v1.104.7） | 21,954,751 字节（20.9 MiB） |
+| `*squashfs-sysupgrade.bin` | **11,862,813 字节（11.31 MiB）** |
+| 15 MiB 分区余量 | 3,865,827 字节（3.69 MiB） |
 | LuCI | 已彻底移除（manifest 校验通过） |
 | OpenSSL | 已彻底移除（切到 mbedTLS，省约 1.5 MiB） |
 | `p910nd` / `kmod-usb-printer` | 均已在 manifest 中 |
@@ -96,6 +96,7 @@ BusyBox httpd 进程。
 | 切 mbedTLS + USB 打印（run 44006144529） | 11,862,813 字节 | −1.09 MiB |
 | 启用 AdvertiseRoutes + 静态地址（run 44008677812） | 11,928,349 字节 | +64 KiB |
 | 控制台 / 状态缓存（run 44015933949） | 11,928,349 字节 | — |
+| 修正 Tailscale 版本 + 新控制台（run 44021981936） | 11,862,813 字节 | −64 KiB |
 
 > 镜像大小会稳定在这个值附近：squashfs 按块压缩，几 KB 的脚本改动经常
 > 落在同一批块里，所以不同提交的 sysupgrade.bin 长度可能一模一样，
