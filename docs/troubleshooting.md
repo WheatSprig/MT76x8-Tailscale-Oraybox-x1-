@@ -54,6 +54,30 @@ netstat -ltn | grep 9100    # 没有就是 p910nd 没起来
 那是旧的默认地址。新固件是 DHCP 客户端，地址由主路由分配；
 `192.168.1.1` 现在很可能是办公室主路由自己。
 
+## 接上设备后，同一网段的电脑打不开路由器 / 其他内网设备
+
+现象：设备一插上，办公室某台电脑访问 `192.168.110.1`、打印机、甚至设备自己
+都超时；把设备拔掉立刻恢复。
+
+原因：那台电脑**自己就在被广播的网段里**，又开启了 Use Tailscale subnets，
+Tailscale 装了一条 `192.168.110.0/24 via 100.100.100.100` 的低 metric 路由，
+把本地流量劫进了隧道。
+
+处理：
+
+1. 在那台电脑上关掉 **Use Tailscale subnets**（托盘菜单），不要只用 CLI，
+   GUI 可能会把它改回来；
+2. 复查：
+
+   ```powershell
+   Get-NetRoute -AddressFamily IPv4 | Where-Object { $_.DestinationPrefix -eq '192.168.110.0/24' }
+   ```
+
+   只应该剩 `NextHop 0.0.0.0`、`InterfaceAlias` 是本地网卡的那条；
+3. 等 30 秒再确认一次没有被重新装上。
+
+远程机器不受影响，继续接受路由即可。
+
 ## 升级后 Tailscale 要重新登录
 
 `/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale` 一起保留，所以正常
