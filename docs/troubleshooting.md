@@ -135,6 +135,16 @@ WiFi 开着时还会更低，于是被误判成“不够 24MB”。
 `/etc/init.d/tailscale` 现在启动前会检查：如果 resolv.conf 里只有 100.100.100.100
 这种地址，就写回一个真实 DNS（DHCP 下发的，或者默认网关），再拉起 tailscaled。
 
+## 发布出去的网段变成了 `192.168.1.0/24`
+
+救援地址 `192.168.1.2/24` 也是挂在 `br-lan` 上的。如果 `lan_cidr()` 直接取
+`ip addr` 的第一行，就可能把救援网段当成 LAN 发布出去（真机踩过：控制面里
+多了 `192.168.1.0/24`，和上游路由器的 WAN 网段撞车）。
+
+现在 `lan_cidr()` 优先用 `ubus call network.interface.lan status` 里的
+`ipv4-address`（netifd 配置的那一个），拿不到才退回 `ip addr`，并且跳过
+`secondary` 的地址。
+
 ## 升级后 Tailscale 要重新登录
 
 `/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale` 一起保留，所以正常
