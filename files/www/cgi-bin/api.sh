@@ -879,9 +879,11 @@ case "$OP" in
 
         # 180 秒内没确认就由 lan-guard 的常驻循环回滚。这里不能再起一次性
         # 后台定时器：uhttpd 结束请求时会把 CGI 的子进程一起带走（实测过）。
-        # 过渡期保留旧地址由 lan-guard 循环负责补，这里只负责延迟 reload，
-        # 先把 HTTP 响应发出去。
-        ( sleep 2; /etc/init.d/network reload >/tmp/lan-reload.log 2>&1 ) &
+        # 延迟 2 秒再 reload，先把 HTTP 响应发出去；reload 之后补一次 ifup，
+        # 否则 static→dhcp 时 DHCP 客户端不会重新启动（实测拿不到地址）。
+        ( sleep 2; /etc/init.d/network reload >/tmp/lan-reload.log 2>&1
+          sleep 3
+          ifup lan >>/tmp/lan-reload.log 2>&1 ) &
 
         if [ "$MODE" = "static" ]; then
             ok "已应用静态地址 $IP/$PREFIX。3 分钟内没有点「确认无误」会自动回滚；请用新地址打开控制台"
@@ -894,7 +896,9 @@ case "$OP" in
             rm -f /etc/lan-pending
             # 让 netifd 按配置重建地址，顺便清掉过渡期手工加的旧地址。
             # 不要手动 ip addr del：实测可能把唯一的地址删掉，接口就彻底没 IP 了。
-            ( /etc/init.d/network reload >/tmp/lan-reload.log 2>&1 ) &
+            ( /etc/init.d/network reload >/tmp/lan-reload.log 2>&1
+              sleep 3
+              ifup lan >>/tmp/lan-reload.log 2>&1 ) &
             ok "已确认，当前地址配置会保留"
         fi
         ok "没有待确认的地址改动"

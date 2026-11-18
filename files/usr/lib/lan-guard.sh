@@ -12,6 +12,7 @@ export PATH
 
 PENDING=/etc/lan-pending
 WAIT=180
+NOIP=0
 
 # 开机兜底
 /usr/lib/lan-rollback.sh check
@@ -37,5 +38,21 @@ while true; do
             /usr/lib/lan-rollback.sh check
         fi
     fi
+
+    # 兜底：br-lan 连续 45 秒没有 IPv4 地址（切 proto 后 udhcpc 没起来、
+    # 或者地址被误删）就重新拉起一次 lan 接口。实测 static→dhcp 切换后
+    # 只 reload 不会重启 DHCP 客户端，必须 ifup。
+    if ip -4 addr show dev br-lan 2>/dev/null | grep -q 'inet '; then
+        NOIP=0
+    else
+        NOIP=$((NOIP + 1))
+        if [ "$NOIP" -ge 3 ]; then
+            logger -t lan-guard "br-lan 没有 IPv4 地址，重新拉起 lan 接口"
+            ifup lan >/dev/null 2>&1
+            NOIP=0
+            sleep 45
+        fi
+    fi
+
     sleep 15
 done

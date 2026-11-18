@@ -39,5 +39,8 @@ rm -f "$PENDING"
 logger -t lan-guard "LAN 配置未确认，已回滚到上一份配置"
 
 # 让新（旧）配置生效；这次 reload 之后如果还有 pending 也不该有了。
+# 只 reload 不会重启 DHCP 客户端（static→dhcp 时实测拿不到地址），补一次 ifup。
 /etc/init.d/network reload >/tmp/lan-reload.log 2>&1
+sleep 2
+ifup lan >>/tmp/lan-reload.log 2>&1
 exit 0
