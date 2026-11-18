@@ -8,6 +8,20 @@ start_service() {
     mkdir -p /etc/tailscale /var/run/tailscale /dev/net
     chmod 700 /etc/tailscale
 
+    # tailscaled 连上以后会把 /etc/resolv.conf 改成 100.100.100.100。
+    # 如果重启/升级时这份文件还留着，DNS 就是死的：tailscaled 自己也会因为
+    # 解析不了 controlplane 卡在 Starting（要手动改回 DNS 才能恢复）。
+    # 启动前先确保有一个真实可用的 nameserver。
+    _real=$(awk '/^nameserver/ && $2 !~ /^100\.100\.100\.100$/ && $2 !~ /^fd7a:/ {print "y"; exit}' \
+        /etc/resolv.conf 2>/dev/null)
+    if [ -z "$_real" ]; then
+        _dns=$(awk '/^nameserver/ && $2 !~ /^100\./ {print $2}' \
+            /tmp/resolv.conf.d/resolv.conf.auto 2>/dev/null | head -n 1)
+        [ -n "$_dns" ] || _dns=$(ip -4 route show default 2>/dev/null \
+            | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n 1)
+        [ -n "$_dns" ] && printf 'nameserver %s\n' "$_dns" > /etc/resolv.conf
+    fi
+
     # kmod-tun 装了不等于已加载，/dev/net/tun 也不会自己出现；
     # tailscaled 没有它就无法建接口，会一直卡在启动阶段。
     modprobe tun 2>/dev/null

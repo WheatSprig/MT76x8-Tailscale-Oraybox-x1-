@@ -117,6 +117,24 @@ Tailscale 会把 portmap 端点排在前面试，前十几秒全打在死端口�
 - CGNAT 下**不可能**做静态端口转发，不要再折腾 `UDP 41641 → 设备`；
   自建 DERP（10ms）兜底已经够用。
 
+## 控制台升级提示「内存不足」
+
+旧版本用 `MemAvailable` 判断，这个内核上报偏低（实际空闲 29MB 时只报 18MB），
+WiFi 开着时还会更低，于是被误判成“不够 24MB”。
+
+现在升级前会停掉 `tailscaled` / `p910nd` / `wpad` 并 `wifi down`，再按
+`MemFree ≥ 14MB` 判断（镜像 11.9MB，留 2MB 余量）。仍然不够就 SSH 刷，
+或手动 `wifi down` 后再试。
+
+## 重启后一直显示「启动中」
+
+`tailscaled` 连上后会把 `/etc/resolv.conf` 改成 `100.100.100.100`。如果重启时
+这份文件还在、而 tailscaled 自己又没起来，DNS 就是死的：它解析不了
+`controlplane.tailscale.com`，会一直卡在 Starting（手动改回 DNS 才会恢复）。
+
+`/etc/init.d/tailscale` 现在启动前会检查：如果 resolv.conf 里只有 100.100.100.100
+这种地址，就写回一个真实 DNS（DHCP 下发的，或者默认网关），再拉起 tailscaled。
+
 ## 升级后 Tailscale 要重新登录
 
 `/lib/upgrade/keep.d/mt76x8` 会把 `/etc/tailscale` 一起保留，所以正常
