@@ -64,17 +64,29 @@ esac
 
 [ -x /sbin/sysupgrade ] || fail "设备上没有 sysupgrade"
 
-# 腾内存：12MB 镜像要落在 tmpfs 里，tailscaled 必须先停。
+# 腾内存：12MB 镜像要落在 tmpfs 里，tailscaled / wpad / 驱动缓冲都得让路。
 /etc/init.d/tailscale stop >/dev/null 2>&1
 /etc/init.d/p910nd stop >/dev/null 2>&1
+/etc/init.d/wpad stop >/dev/null 2>&1
+wifi down >/dev/null 2>&1
 sync
-sleep 1
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+sleep 2
 
-AVAIL=$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
-[ -n "$AVAIL" ] || AVAIL=0
-if [ "$AVAIL" -lt 24 ]; then
+# 这里看 MemFree：这个内核上报的 MemAvailable 偏低（空闲 15~29MB 时只报 9~18MB），
+# 用它会误判。镜像 11.9MB，留 2MB 余量。
+FREE=$(awk '/^MemFree:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+[ -n "$FREE" ] || FREE=0
+
+restore_services() {
+    /etc/init.d/wpad start >/dev/null 2>&1
+    wifi up >/dev/null 2>&1
     /etc/init.d/tailscale start >/dev/null 2>&1
-    fail "可用内存只有 ${AVAIL}MB，升级至少需要 24MB，请稍后重试"
+}
+
+if [ "$FREE" -lt 14 ]; then
+    restore_services
+    fail "空闲内存只有 ${FREE}MB，升级至少需要 14MB，请稍后重试"
 fi
 
 : > /tmp/upgrade.lock
@@ -86,7 +98,7 @@ GOT=${GOT:-0}
 
 restore_and_fail() {
     rm -f "$TMP_IMG" /tmp/upgrade.lock
-    /etc/init.d/tailscale start >/dev/null 2>&1
+    restore_services
     fail "$1"
 }
 
