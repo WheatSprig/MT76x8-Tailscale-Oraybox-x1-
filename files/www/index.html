@@ -498,8 +498,8 @@
           </p>
           <p class="hint hide" id="wifi-wan-warn">
             设备会变成路由器：LAN 改为 <span class="mono">192.168.88.1/24</span> 并开启 DHCP，
-            WiFi 作为上行。切换前请拔掉上行网线（检测到别的 DHCP 会拒绝）。
-            当前页面会断开，之后请用 <span class="mono">192.168.88.1</span> 或 Tailscale 地址访问。
+            WiFi 作为上行；<b>此模式下 Tailscale 不启动，菜单里的 Tailscale 页会隐藏</b>。
+            保存后设备会重启，之后请用 <span class="mono">192.168.88.1</span> 访问。
           </p>
         </div>
         <div class="actions">
@@ -1249,6 +1249,14 @@
     setWifiMode(j.mode === 'off' ? 'off' : (j.mode === 'ap' ? 'ap' : (j.mode === 'wan' ? 'wan' : 'client')));
     var inp = $('wifi-ssid-input');
     if (document.activeElement !== inp && !inp.value && j.cfg_ssid) inp.value = j.cfg_ssid;
+
+    // 纯无线 WAN 模式下 Tailscale 不启动，菜单里也不给入口（省得点进去看“已停止”）。
+    var wan = (j.mode === 'wan');
+    var navTs = document.querySelector('#nav a[data-page="tailscale"]');
+    if (navTs) navTs.classList.toggle('hide', wan);
+    var hero = document.querySelector('.hero-actions');
+    if (hero) hero.classList.toggle('hide', wan);
+    if (wan && state.page === 'tailscale') go('overview');
   }
 
   function renderScan(list) {
@@ -1373,7 +1381,8 @@
       $('ov-state').textContent = '设备离线';
       $('ov-state').className = 'state bad';
     });
-    if (state.page === 'network') { loadNet(); loadLan(); loadWifi(); }
+    loadWifi();
+    if (state.page === 'network') { loadNet(); loadLan(); }
     if (state.page === 'system') loadSys();
   }
 

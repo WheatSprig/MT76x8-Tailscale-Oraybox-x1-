@@ -196,6 +196,11 @@ lan_mode_enter_wan() {
     # 允许看门狗在“有别的 DHCP”和“没有 DHCP”之间自动开关
     : > /etc/lan-dhcp-auto
     : > /etc/wifi-wan
+
+    # 纯无线 WAN：设备就是一台普通路由器，不再跑 Tailscale（省 13MB 内存，
+    # 也避免两种网络角色混在一起）。切回去时会重新 enable。
+    /etc/init.d/tailscale disable >/dev/null 2>&1
+    /etc/init.d/tailscale stop >/dev/null 2>&1
 }
 
 # 从无线 WAN 切回：LAN 回到 DHCP 客户端，关掉自带 DHCP，摘掉防火墙 zone。
@@ -1099,10 +1104,12 @@ case "$OP" in
           /etc/init.d/firewall reload >>/tmp/wifi-apply.log 2>&1 ) &
 
         if [ "$MODE" = "wan" ]; then
+            # 配置已经落盘，重启一次让网络状态干净（避免半切换的中间态）。
+            ( sleep 4; reboot ) >/dev/null 2>&1 &
             if [ "$WAN_NO_DHCP" = "1" ]; then
-                ok "已切换为无线 WAN：LAN 192.168.88.1/24。检测到 LAN 上已有 DHCP，本机 DHCP 先关闭；拔掉上行网线后约 1 分钟会自动开启"
+                ok "已切换为无线 WAN：LAN 192.168.88.1/24。检测到 LAN 上已有 DHCP，本机 DHCP 先关闭；拔掉上行网线后约 1 分钟会自动开启。设备即将重启，约 1 分钟后用 192.168.88.1 访问"
             fi
-            ok "已切换为无线 WAN：LAN 变成 192.168.88.1/24（DHCP 已开），WiFi 当上行。当前页面会断开，请用 192.168.88.1 或 Tailscale 地址访问"
+            ok "已切换为无线 WAN：LAN 变成 192.168.88.1/24（DHCP 已开），WiFi 当上行。此模式下 Tailscale 已关闭。设备即将重启，约 1 分钟后用 192.168.88.1 访问"
         fi
         if [ "$MODE" = "ap" ]; then
             ok "热点已保存并开启：$SSID（客户端地址由主路由分配，切换后 WiFi 容灾链路会暂时没有）"

@@ -67,7 +67,7 @@ if [ ! -f /etc/tailscale/routes ]; then
     : > /etc/tailscale/routes
     : > /etc/tailscale/lan-auto
 fi
-[ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable
+[ -f /etc/wifi-wan ] || { [ -x /etc/init.d/tailscale ] && /etc/init.d/tailscale enable; }
 # 开机兜底：回滚未确认的 LAN 改动 + 补加救援地址。
 [ -x /etc/init.d/lan-guard ] && /etc/init.d/lan-guard enable
 # 有线网关不通时自动让 WiFi 接管默认路由。
@@ -341,6 +341,13 @@ apply_prefs() {
 
 (
     while true; do
+        # 纯无线 WAN：这台设备就是普通路由器，Tailscale 不参与，只刷新状态。
+        if [ -f /etc/wifi-wan ]; then
+            ts_collect
+            sleep 15
+            continue
+        fi
+
         CUR=$(lan_cidr)
         if [ -n "$CUR" ]; then
             echo "$CUR" > /etc/tailscale/lan-cidr
