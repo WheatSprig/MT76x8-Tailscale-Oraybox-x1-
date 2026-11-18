@@ -1,0 +1,9 @@
+#!/bin/sh
+# lan 每次 ifup（接上网线/换网络）时重新判断救援 DHCP：
+# 先停掉自己，再按“有没有别的 DHCP / 有没有默认路由”决定要不要重开。
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "lan" ] || exit 0
+
+/usr/lib/rescue-dhcp.sh stop
+/usr/lib/rescue-dhcp.sh check
+exit 0

@@ -13,6 +13,8 @@ export PATH
 PENDING=/etc/lan-pending
 WAIT=180
 NOIP=0
+CYCLE=0
+WAN_NO=0
 
 # 开机兜底
 /usr/lib/lan-rollback.sh check
@@ -43,6 +45,32 @@ while true; do
             ifup lan >/dev/null 2>&1
             NOIP=0
             sleep 45
+        fi
+    fi
+
+    # 每 60 秒处理一次 DHCP 的事：
+    #   - 无线 WAN 模式：如果当前为了避让关着 DHCP，探测到长期没有别的 DHCP
+    #     就自动打开（拔掉上行网线后不用手动改）；
+    #   - 其他模式：交给 rescue-dhcp.sh 判断要不要给直连电脑发 192.168.1.x。
+    CYCLE=$((CYCLE + 1))
+    if [ $((CYCLE % 4)) -eq 0 ]; then
+        if [ -f /etc/wifi-wan ] && [ -f /etc/lan-dhcp-auto ]; then
+            if [ "$(uci -q get dhcp.lan.ignore)" = "1" ]; then
+                if udhcpc -i br-lan -n -q -t 2 -T 2 -s /bin/true >/dev/null 2>&1; then
+                    WAN_NO=0
+                else
+                    WAN_NO=$((WAN_NO + 1))
+                    if [ "$WAN_NO" -ge 2 ]; then
+                        uci -q set dhcp.lan.ignore='0'
+                        uci -q commit dhcp
+                        /etc/init.d/dnsmasq restart >/dev/null 2>&1
+                        WAN_NO=0
+                        logger -t dhcp-watch "LAN 上仍没有 DHCP，本机 DHCP 已自动打开"
+                    fi
+                fi
+            fi
+        else
+            /usr/lib/rescue-dhcp.sh check
         fi
     fi
 

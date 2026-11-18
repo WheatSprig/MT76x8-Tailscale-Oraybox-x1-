@@ -159,6 +159,7 @@ probe_dhcp_lan() {
 }
 
 # 无线 WAN：设备变成路由器，LAN 192.168.88.1/24 + DHCP，WiFi 当上行。
+# $1 = no-dhcp 时先把自带 DHCP 关掉（LAN 上已经有别的 DHCP，先避让）。
 lan_mode_enter_wan() {
     [ -f /etc/config/network.wanbak ] || cp -f /etc/config/network /etc/config/network.wanbak 2>/dev/null
     [ -f /etc/config/dhcp.wanbak ] || cp -f /etc/config/dhcp /etc/config/dhcp.wanbak 2>/dev/null
@@ -173,10 +174,14 @@ lan_mode_enter_wan() {
     uci -q commit network
 
     # 小池子、短租期：家里/临时用，别占太多内存
-    uci -q set dhcp.lan.ignore='0'
     uci -q set dhcp.lan.start='100'
     uci -q set dhcp.lan.limit='50'
     uci -q set dhcp.lan.leasetime='1h'
+    if [ "$1" = "no-dhcp" ]; then
+        uci -q set dhcp.lan.ignore='1'
+    else
+        uci -q set dhcp.lan.ignore='0'
+    fi
     uci -q commit dhcp
 
     for z in $(uci show firewall 2>/dev/null | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
@@ -188,6 +193,8 @@ lan_mode_enter_wan() {
         uci -q commit firewall
     done
 
+    # 允许看门狗在“有别的 DHCP”和“没有 DHCP”之间自动开关
+    : > /etc/lan-dhcp-auto
     : > /etc/wifi-wan
 }
 
@@ -209,7 +216,8 @@ lan_mode_leave_wan() {
         uci -q commit firewall
     done
 
-    rm -f /etc/wifi-wan
+    rm -f /etc/wifi-wan /etc/lan-dhcp-auto
+    /usr/lib/rescue-dhcp.sh stop 2>/dev/null
 }
 
 # ---------------------------------------------------------------- 输入解析
@@ -988,11 +996,13 @@ case "$OP" in
                 : > /etc/lan-rescue
                 rm -f /etc/lan-rescue.off
                 ip addr add 192.168.1.2/24 brd + dev br-lan 2>/dev/null
-                ok "救援地址已启用：192.168.1.2/24（直连的电脑需要手动配 192.168.1.x）"
+                /usr/lib/rescue-dhcp.sh check 2>/dev/null
+                ok "救援地址已启用：192.168.1.2/24（断网时会给直连电脑发 192.168.1.x）"
                 ;;
             off)
                 rm -f /etc/lan-rescue
                 : > /etc/lan-rescue.off
+                /usr/lib/rescue-dhcp.sh stop 2>/dev/null
                 ip addr del 192.168.1.2/24 dev br-lan 2>/dev/null
                 ok "救援地址已关闭（如果以后网络不通，只能有线直连并手动配地址）"
                 ;;
@@ -1026,9 +1036,11 @@ case "$OP" in
             [ ${#KEY} -le 63 ] || fail "WPA 密码最多 63 位"
         fi
 
-        # 无线 WAN：先探测 LAN 上有没有别的 DHCP，有就拒绝，避免抢地址。
+        # 无线 WAN：探测 LAN 上有没有别的 DHCP。有就先关掉自带 DHCP（避让），
+        # 由 lan-guard 在拔掉上行网线后自动打开。
+        WAN_NO_DHCP=0
         if [ "$MODE" = "wan" ]; then
-            probe_dhcp_lan && fail "LAN 上已经有 DHCP 服务器（收到 OFFER）。请先拔掉上行网线，再切无线 WAN"
+            probe_dhcp_lan && WAN_NO_DHCP=1
         fi
 
         uci -q set wireless.radio0.disabled='0'
@@ -1063,7 +1075,11 @@ case "$OP" in
 
         # 模式切换：wan → 其他要恢复 LAN；其他 → wan 要改 LAN + 开 DHCP。
         if [ "$MODE" = "wan" ]; then
-            lan_mode_enter_wan
+            if [ "$WAN_NO_DHCP" = "1" ]; then
+                lan_mode_enter_wan no-dhcp
+            else
+                lan_mode_enter_wan
+            fi
         elif [ -f /etc/wifi-wan ]; then
             lan_mode_leave_wan
         fi
@@ -1083,6 +1099,9 @@ case "$OP" in
           /etc/init.d/firewall reload >>/tmp/wifi-apply.log 2>&1 ) &
 
         if [ "$MODE" = "wan" ]; then
+            if [ "$WAN_NO_DHCP" = "1" ]; then
+                ok "已切换为无线 WAN：LAN 192.168.88.1/24。检测到 LAN 上已有 DHCP，本机 DHCP 先关闭；拔掉上行网线后约 1 分钟会自动开启"
+            fi
             ok "已切换为无线 WAN：LAN 变成 192.168.88.1/24（DHCP 已开），WiFi 当上行。当前页面会断开，请用 192.168.88.1 或 Tailscale 地址访问"
         fi
         if [ "$MODE" = "ap" ]; then
