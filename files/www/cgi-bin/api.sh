@@ -877,10 +877,10 @@ case "$OP" in
         [ -n "$TOKEN" ] || TOKEN=$(date +%s)
         printf '%s\n%s\n%s\n%s\n' "$TOKEN" "$(date +%s)" "$OLD_IP" "$OLD_PFX" > /etc/lan-pending
 
-        # 180 秒内没确认就回滚；进程放到后台，CGI 先返回。
-        ( /usr/lib/lan-rollback.sh guarded "$TOKEN" >/dev/null 2>&1 & )
-
-        # 延迟 2 秒再 reload：先让这次 HTTP 响应发出去，否则切网段时页面收不到结果。
+        # 180 秒内没确认就由 lan-guard 的常驻循环回滚。这里不能再起一次性
+        # 后台定时器：uhttpd 结束请求时会把 CGI 的子进程一起带走（实测过）。
+        # 过渡期保留旧地址由 lan-guard 循环负责补，这里只负责延迟 reload，
+        # 先把 HTTP 响应发出去。
         ( sleep 2; /etc/init.d/network reload >/tmp/lan-reload.log 2>&1 ) &
 
         if [ "$MODE" = "static" ]; then
@@ -891,15 +891,10 @@ case "$OP" in
 
     lan_confirm)
         if [ -f /etc/lan-pending ]; then
-            OLD_IP=$(sed -n '3p' /etc/lan-pending 2>/dev/null)
-            OLD_PFX=$(sed -n '4p' /etc/lan-pending 2>/dev/null)
             rm -f /etc/lan-pending
-            # 确认后把过渡期的旧地址摘掉（如果和新地址不同）。
-            CUR_IP=$(ip -4 addr show dev br-lan 2>/dev/null \
-                | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
-            if [ -n "$OLD_IP" ] && [ -n "$OLD_PFX" ] && [ "$OLD_IP" != "$CUR_IP" ]; then
-                ip addr del "$OLD_IP/$OLD_PFX" dev br-lan 2>/dev/null
-            fi
+            # 让 netifd 按配置重建地址，顺便清掉过渡期手工加的旧地址。
+            # 不要手动 ip addr del：实测可能把唯一的地址删掉，接口就彻底没 IP 了。
+            ( /etc/init.d/network reload >/tmp/lan-reload.log 2>&1 ) &
             ok "已确认，当前地址配置会保留"
         fi
         ok "没有待确认的地址改动"
