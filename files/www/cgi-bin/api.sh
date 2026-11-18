@@ -363,10 +363,18 @@ if [ "$OP" = "lan" ]; then
     LAN_PROTO=$(uci -q get network.lan.proto)
     [ -n "$LAN_PROTO" ] || LAN_PROTO=dhcp
 
-    CUR=$(ip -4 addr show dev br-lan 2>/dev/null \
-        | sed -n 's/.*inet \([0-9.]*\)\/\([0-9]*\).*/\1 \2/p' | head -n 1)
-    CUR_IP=${CUR% *}
-    CUR_PFX=${CUR#* }
+    # 用 netifd 的主地址：br-lan 上可能还有救援地址或过渡期的旧地址，
+    # 直接取 ip addr 的第一行会拿到 192.168.1.2。
+    _uat=$(ubus call network.interface.lan status 2>/dev/null | tr -d ' \t\n' \
+        | sed -n 's/.*"ipv4-address":\[{"address":"\([0-9.]*\)","mask":\([0-9]*\)}.*/\1 \2/p')
+    CUR_IP=${_uat% *}
+    CUR_PFX=${_uat#* }
+    if [ -z "$CUR_IP" ]; then
+        CUR=$(ip -4 addr show dev br-lan 2>/dev/null | grep 'inet ' | grep -v secondary \
+            | sed -n 's/.*inet \([0-9.]*\)\/\([0-9]*\).*/\1 \2/p' | head -n 1)
+        CUR_IP=${CUR% *}
+        CUR_PFX=${CUR#* }
+    fi
     [ -n "$CUR_IP" ] || CUR_PFX=24
 
     CUR_GW=$(ip -4 route show default 2>/dev/null \

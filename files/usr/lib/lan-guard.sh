@@ -23,14 +23,6 @@ fi
 
 while true; do
     if [ -f "$PENDING" ]; then
-        # 确认之前把改动前的地址一直挂着，改错网段也能从旧地址回来。
-        _oip=$(sed -n '3p' "$PENDING" 2>/dev/null)
-        _opfx=$(sed -n '4p' "$PENDING" 2>/dev/null)
-        if [ -n "$_oip" ] && [ -n "$_opfx" ]; then
-            ip -4 addr show dev br-lan 2>/dev/null | grep -q "inet $_oip/$_opfx" \
-                || ip addr add "$_oip/$_opfx" brd + dev br-lan 2>/dev/null
-        fi
-
         _ts=$(sed -n '2p' "$PENDING" 2>/dev/null)
         case "$_ts" in ''|*[!0-9]*) _ts=0 ;; esac
         _now=$(date +%s)
