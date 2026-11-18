@@ -147,6 +147,71 @@ ts_lock_release() {
     rm -f /tmp/ts-cli.lock
 }
 
+# ---------------------------------------------------------------- 无线 WAN 模式
+
+# LAN 上有没有别的 DHCP 服务器：发一次 DISCOVER，收到 OFFER 就算有。
+# -s /bin/true 保证不会真的配置接口，纯探测（避让用）。
+probe_dhcp_lan() {
+    command -v udhcpc >/dev/null 2>&1 || return 1
+    udhcpc -i br-lan -n -q -t 2 -T 2 -s /bin/true >/dev/null 2>&1
+    [ $? -eq 0 ] && return 0
+    return 1
+}
+
+# 无线 WAN：设备变成路由器，LAN 192.168.88.1/24 + DHCP，WiFi 当上行。
+lan_mode_enter_wan() {
+    [ -f /etc/config/network.wanbak ] || cp -f /etc/config/network /etc/config/network.wanbak 2>/dev/null
+    [ -f /etc/config/dhcp.wanbak ] || cp -f /etc/config/dhcp /etc/config/dhcp.wanbak 2>/dev/null
+    [ -f /etc/config/firewall.wanbak ] || cp -f /etc/config/firewall /etc/config/firewall.wanbak 2>/dev/null
+
+    uci -q set network.lan.proto='static'
+    uci -q set network.lan.ipaddr='192.168.88.1'
+    uci -q set network.lan.netmask='255.255.255.0'
+    uci -q delete network.lan.gateway
+    uci -q delete network.lan.dns
+    uci -q delete network.lan.ip6assign
+    uci -q commit network
+
+    # 小池子、短租期：家里/临时用，别占太多内存
+    uci -q set dhcp.lan.ignore='0'
+    uci -q set dhcp.lan.start='100'
+    uci -q set dhcp.lan.limit='50'
+    uci -q set dhcp.lan.leasetime='1h'
+    uci -q commit dhcp
+
+    for z in $(uci show firewall 2>/dev/null | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+        [ "$(uci -q get firewall.$z.name)" = "wan" ] || continue
+        uci -q get firewall.$z.network 2>/dev/null | tr ' ' '\n' | grep -qx wwan \
+            || uci -q add_list firewall.$z.network='wwan'
+        uci -q set firewall.$z.masq='1'
+        uci -q set firewall.$z.mtu_fix='1'
+        uci -q commit firewall
+    done
+
+    : > /etc/wifi-wan
+}
+
+# 从无线 WAN 切回：LAN 回到 DHCP 客户端，关掉自带 DHCP，摘掉防火墙 zone。
+lan_mode_leave_wan() {
+    uci -q set network.lan.proto='dhcp'
+    uci -q delete network.lan.ipaddr
+    uci -q delete network.lan.netmask
+    uci -q delete network.lan.gateway
+    uci -q delete network.lan.dns
+    uci -q commit network
+
+    uci -q set dhcp.lan.ignore='1'
+    uci -q commit dhcp
+
+    for z in $(uci show firewall 2>/dev/null | sed -n 's/^firewall\.\([^.=]*\)=zone$/\1/p'); do
+        [ "$(uci -q get firewall.$z.name)" = "wan" ] || continue
+        uci -q del_list firewall.$z.network='wwan' 2>/dev/null
+        uci -q commit firewall
+    done
+
+    rm -f /etc/wifi-wan
+}
+
 # ---------------------------------------------------------------- 输入解析
 
 [ "$REQUEST_METHOD" = "POST" ] || REQUEST_METHOD=GET
@@ -451,10 +516,12 @@ if [ "$OP" = "wifi" ]; then
             *) MODE=${IF_MODE:-ap} ;;
         esac
     fi
+    # STA + /etc/wifi-wan = 无线 WAN（设备当路由器）
+    [ "$MODE" = "client" ] && [ -f /etc/wifi-wan ] && MODE=wan
 
     ALLDEV=$(iw dev 2>/dev/null | sed -n 's/.*Interface \(phy[0-9]*-[a-z0-9]*\).*/\1/p')
 
-    if [ "$MODE" = "client" ]; then
+    if [ "$MODE" = "client" ] || [ "$MODE" = "wan" ]; then
         WDEV=$(ubus call network.interface.wwan status 2>/dev/null \
             | tr -d ' \t\n' | sed -n 's/.*"l3_device":"\([^"]*\)".*/\1/p')
         [ -n "$WDEV" ] || WDEV=$(printf '%s\n' "$ALLDEV" | grep -m 1 'sta')
@@ -484,6 +551,8 @@ if [ "$OP" = "wifi" ]; then
 
     EXIT_DEV=$(ip route show default 2>/dev/null \
         | sed -n 's/^default via [0-9.]* dev \([^ ]*\).*/\1/p' | head -n 1)
+    LAN_IP_NOW=$(ubus call network.interface.lan status 2>/dev/null | tr -d ' \t\n' \
+        | sed -n 's/.*"ipv4-address":\[{"address":"\([0-9.]*\)".*/\1/p')
 
     json_header
     printf '\r\n'
@@ -499,6 +568,7 @@ if [ "$OP" = "wifi" ]; then
   "ip": "$(json_escape "$WIP")",
   "iface": "$(json_escape "$WDEV")",
   "clients": $CLIENTS,
+  "lan_ip": "$(json_escape "$LAN_IP_NOW")",
   "exit_dev": "$(json_escape "$EXIT_DEV")"
 }
 EOF
@@ -935,11 +1005,12 @@ case "$OP" in
     wifi_apply)
         MODE=$(param mode)
         case "$MODE" in
-            client|ap|off) ;;
-            *) fail "模式只能是 client、ap 或 off" ;;
+            client|ap|wan|off) ;;
+            *) fail "模式只能是 client、ap、wan 或 off" ;;
         esac
 
         if [ "$MODE" = "off" ]; then
+            [ -f /etc/wifi-wan ] && lan_mode_leave_wan
             uci -q set wireless.radio0.disabled='1'
             uci -q commit wireless
             ( wifi down >/tmp/wifi-apply.log 2>&1 ) &
@@ -953,6 +1024,11 @@ case "$OP" in
         if [ ${#KEY} -gt 0 ]; then
             [ ${#KEY} -ge 8 ] || fail "WPA 密码至少 8 位"
             [ ${#KEY} -le 63 ] || fail "WPA 密码最多 63 位"
+        fi
+
+        # 无线 WAN：先探测 LAN 上有没有别的 DHCP，有就拒绝，避免抢地址。
+        if [ "$MODE" = "wan" ]; then
+            probe_dhcp_lan && fail "LAN 上已经有 DHCP 服务器（收到 OFFER）。请先拔掉上行网线，再切无线 WAN"
         fi
 
         uci -q set wireless.radio0.disabled='0'
@@ -975,7 +1051,7 @@ case "$OP" in
         fi
         uci -q commit wireless
 
-        if [ "$MODE" = "client" ]; then
+        if [ "$MODE" = "client" ] || [ "$MODE" = "wan" ]; then
             # 独立接口，不桥进 br-lan（STA 不允许桥接）
             uci -q set network.wwan=interface
             uci -q set network.wwan.proto='dhcp'
@@ -985,12 +1061,30 @@ case "$OP" in
             /etc/init.d/net-failover start >/dev/null 2>&1
         fi
 
+        # 模式切换：wan → 其他要恢复 LAN；其他 → wan 要改 LAN + 开 DHCP。
+        if [ "$MODE" = "wan" ]; then
+            lan_mode_enter_wan
+        elif [ -f /etc/wifi-wan ]; then
+            lan_mode_leave_wan
+        fi
+
         /etc/init.d/wpad enable >/dev/null 2>&1
         /etc/init.d/wpad start >/dev/null 2>&1
 
-        # wifi reload 有时不会把停着的 radio 拉起来，补一次 wifi up
-        ( wifi reload >/tmp/wifi-apply.log 2>&1; sleep 1; wifi up >>/tmp/wifi-apply.log 2>&1 ) &
+        # wifi reload 有时不会把停着的 radio 拉起来，补一次 wifi up；
+        # WAN 模式还要把 lan/wwan 重新拉起来、重启 dnsmasq 和防火墙。
+        ( wifi reload >/tmp/wifi-apply.log 2>&1
+          sleep 1
+          wifi up >>/tmp/wifi-apply.log 2>&1
+          sleep 8
+          ifup lan >>/tmp/wifi-apply.log 2>&1
+          ifup wwan >>/tmp/wifi-apply.log 2>&1
+          /etc/init.d/dnsmasq restart >>/tmp/wifi-apply.log 2>&1
+          /etc/init.d/firewall reload >>/tmp/wifi-apply.log 2>&1 ) &
 
+        if [ "$MODE" = "wan" ]; then
+            ok "已切换为无线 WAN：LAN 变成 192.168.88.1/24（DHCP 已开），WiFi 当上行。当前页面会断开，请用 192.168.88.1 或 Tailscale 地址访问"
+        fi
         if [ "$MODE" = "ap" ]; then
             ok "热点已保存并开启：$SSID（客户端地址由主路由分配，切换后 WiFi 容灾链路会暂时没有）"
         fi
